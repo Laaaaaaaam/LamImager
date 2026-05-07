@@ -49,6 +49,7 @@ build/
 # Agent config
 AGENTS.md
 AGENTS.zh-CN.md
+.trae/
 
 # Plans
 docs/plans/
