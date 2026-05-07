@@ -1,0 +1,17 @@
+fastapi>=0.115.6
+uvicorn[standard]>=0.34.0
+sqlalchemy[asyncio]>=2.0.37
+aiosqlite>=0.21.0
+pydantic>=2.10.0
+pydantic-settings>=2.7.0
+python-multipart>=0.0.18
+aiohttp>=3.11.0
+cryptography>=44.0.0
+PyJWT>=2.9.0
+alembic>=1.14.0
+websockets>=14.0
+Pillow>=11.1.0
+pywebview>=5.0
+pystray>=0.19
+pyinstaller>=6.0
+filelock>=3.13

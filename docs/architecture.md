@@ -1,0 +1,210 @@
+# LamImager Architecture
+
+## System Overview
+
+LamImager is a monolithic web application for managing AI image generation tasks with a conversation-based UI. It combines a FastAPI backend (Python 3.14+) with a Vue3 frontend, using SQLite for data persistence.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        Browser                               │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │                 Vue3 SPA (Vite)                      │   │
+│  │  Pinia Stores ← API Clients (Axios)                  │   │
+│  │  Sessions.vue (Main UI with Assistant Sidebar)       │   │
+│  └──────────────────────┬──────────────────────────────┘   │
+└─────────────────────────┼───────────────────────────────────┘
+                          │ HTTP/REST
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    FastAPI Backend                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
+│  │   Routers   │→ │  Services   │→ │   Models    │        │
+│  │ (10 modules)│  │ (11 services)│  │ (9 tables) │        │
+│  └─────────────┘  └─────────────┘  └──────┬──────┘        │
+│                                           │                │
+│  ┌────────────────────────────────────────┼──────────────┐ │
+│  │              External APIs              │              │ │
+│  │  LLM Client ──────► OpenAI-compatible LLM API         │ │
+│  │  Image Client ────► OpenAI-compatible Image API       │ │
+│  │  (chat_edit also uses /v1/chat/completions for img2img) │ │
+│  └───────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                     SQLite Database                         │
+│  data/lamimager.db (AES-256-GCM encrypted API keys)        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Core Components
+
+### Backend (FastAPI)
+
+| Component | Purpose | Files |
+|-----------|---------|-------|
+| Routers | HTTP endpoint definitions | `app/routers/*.py` |
+| Services | Business logic, external API calls | `app/services/*.py` |
+| Models | SQLAlchemy ORM definitions | `app/models/*.py` |
+| Schemas | Pydantic validation/serialization | `app/schemas/*.py` |
+| Utils | Crypto, LLM client, Image client | `app/utils/*.py` |
+
+### Frontend (Vue3)
+
+| Component | Purpose | Files |
+|-----------|---------|-------|
+| Views | Page components | `src/views/*.vue` |
+| API Clients | Axios HTTP clients | `src/api/*.ts` |
+| Stores | Pinia state management | `src/stores/*.ts` |
+| Types | TypeScript interfaces | `src/types/index.ts` |
+
+## Data Models
+
+| Model | Purpose |
+|-------|---------|
+| `api_providers` | API configurations (LLM + Image Gen), encrypted keys |
+| `skills` | Reusable prompt templates |
+| `rules` | Global configuration rules (default_params/filter/workflow) |
+| `billing_records` | Cost tracking per API call (linked to sessions) |
+| `reference_images` | Reference image metadata with strength/crop config |
+| `sessions` | Conversation sessions for the chat-based UI |
+| `messages` | Messages within sessions (user/assistant/system) |
+| `app_settings` | Application settings (default providers, image size, max_concurrent) |
+| `plan_templates` | Plan templates with variables for template-based planning |
+
+## Data Flow
+
+### Session-Based Generation Flow
+
+```
+User Input (with optional attachments + reference images)
+    │
+    ▼
+┌──────────────────┐
+│ Sessions.vue     │  Chat input with file upload (base64)
+│                  │  Sends context_messages (last 10 msgs)
+└────────┬─────────┘
+         │ POST /api/sessions/{id}/generate
+         │  { prompt, reference_images, context_messages }
+         ▼
+┌──────────────────┐
+│ session.py router│  Validates input, creates message
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ generate_service │  Applies skills/rules, injects context
+│                  │  Passes reference_images to ImageClient
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ ImageClient      │  Image-to-Image 3-tier fallback:
+│                  │  Tier 1: chat_edit() → /v1/chat/completions (multimodal)
+│                  │  Tier 2: edit()      → /v1/images/edits (native)
+│                  │  Tier 3: generate()  → /v1/images/generations (text-only via Vision LLM)
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│ Billing created  │  Cost recorded automatically
+└──────────────────┘
+```
+
+### LLM Assistant Flow (Streaming)
+
+```
+User Message (with optional attachments)
+    │
+    ▼
+┌──────────────────┐
+│ Sessions.vue     │  Assistant sidebar dialog / optimize / plan
+└────────┬─────────┘
+         │ POST /api/prompt/stream (SSE)
+         ▼
+┌──────────────────┐
+│ stream_llm_chat  │  Calls LLM API with streaming
+└────────┬─────────┘
+         │ token by token (SSE)
+         ▼
+┌──────────────────┐
+│ Frontend renders │  Real-time streaming display
+└────────┬─────────┘
+         │ [DONE] event
+         ▼
+┌──────────────────┐
+│ Billing created  │  Token usage recorded
+└──────────────────┘
+```
+
+## Security
+
+### API Key Encryption
+
+- Algorithm: AES-256-GCM
+- Key derivation: SHA-256(MAC address + hostname)
+- Storage: Base64(nonce + ciphertext + tag) in SQLite
+- Response masking: Show only last 4 characters
+
+### Encryption Flow
+
+```python
+# Encrypt
+key = derive_key()  # From machine fingerprint
+nonce = os.urandom(12)
+ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
+stored = base64.b64encode(nonce + ciphertext)
+
+# Decrypt
+combined = base64.b64decode(stored)
+nonce, ciphertext = combined[:12], combined[12:]
+plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
+```
+
+## Billing
+
+### Image Generation
+- Per-call billing: Fixed cost per image
+- Per-token billing: Cost based on input/output tokens
+- Image-to-image: chat_edit charges via Chat API (per-token), edit charges via Images API
+
+### LLM Services
+- Prompt optimization, LLM planning, assistant dialog
+- Image description via Vision LLM (fallback for img2img on unsupported providers)
+- Cost = unit_price × (tokens_in + tokens_out) / 1000
+- Billing records created in `prompt_optimizer.py` and `generate_service.py`
+- Streaming via `/api/prompt/stream` (SSE), billed in `stream_llm_chat()`
+
+## Concurrency Model
+
+- Backend: Async/await with asyncio
+- Database: aiosqlite for async SQLite
+- TaskManager singleton: Global task state + SSE broadcast to all connected clients
+- Image generation: `asyncio.Semaphore` for rate limiting
+- Frontend: SSE EventSource for real-time task status (snapshot + task_update + ping), no WebSocket needed
+- Multi-session: activeTasks Map enables concurrent generation across multiple sessions
+
+## Configuration
+
+| Setting | Default | Location |
+|---------|---------|----------|
+| `DATA_DIR` | `./data` | `config.py` |
+| `DB_URL` | `sqlite+aiosqlite:///data/lamimager.db` | `config.py` |
+| `MAX_CONCURRENT_TASKS` | 5 | `config.py` / app_settings |
+| `CORS_ORIGINS` | `["http://localhost:5173"]` | `config.py` |
+
+## Deployment
+
+### Requirements
+- Python 3.14+ (standard GIL mode, NOT free-threaded `python3.14t`)
+- Node.js 18+
+
+### Development
+- Frontend: Vite dev server on port 5173
+- Backend: Uvicorn on port 8000
+- Vite proxy forwards `/api` to backend
+
+### Production
+- Build frontend: `npm run build` → `frontend/dist/`
+- FastAPI serves static files from `frontend/dist/`
+- Single process handles both API and static files
