@@ -91,23 +91,6 @@ async def apply_template(db: AsyncSession, template_id: str, data: PlanTemplateA
 
 _BUILTIN_TEMPLATES = [
     {
-        "name": "产品展示套图",
-        "description": "生成产品的正面/侧面/细节/场景展示图",
-        "strategy": "parallel",
-        "is_builtin": True,
-        "variables": [
-            {"key": "product", "type": "string", "label": "产品名称", "default": "", "required": True},
-            {"key": "style", "type": "string", "label": "风格", "default": "modern minimalist"},
-            {"key": "background", "type": "string", "label": "背景", "default": "white studio background"},
-        ],
-        "steps": [
-            {"prompt": "Front view of {{product}}, {{style}}, {{background}}, product photography, 8k", "negative_prompt": "blurry, low quality, distorted", "description": "正面展示", "image_count": 1, "image_size": ""},
-            {"prompt": "Side view of {{product}}, {{style}}, {{background}}, product photography, 8k", "negative_prompt": "blurry, low quality, distorted", "description": "侧面展示", "image_count": 1, "image_size": ""},
-            {"prompt": "Close-up detail of {{product}}, {{style}}, macro photography, {{background}}, 8k", "negative_prompt": "blurry, low quality, distorted", "description": "细节特写", "image_count": 1, "image_size": ""},
-            {"prompt": "{{product}} in lifestyle scene, {{style}}, natural lighting, lifestyle photography, 8k", "negative_prompt": "blurry, low quality, distorted", "description": "场景展示", "image_count": 1, "image_size": ""},
-        ],
-    },
-    {
         "name": "角色设计",
         "description": "生成角色概念设计、精修和变体图",
         "strategy": "iterative",
@@ -121,22 +104,6 @@ _BUILTIN_TEMPLATES = [
             {"prompt": "Character design concept of {{character}}, {{art_style}}, {{pose}}, full body, character sheet", "negative_prompt": "blurry, low quality, deformed", "description": "概念设计", "image_count": 2, "image_size": ""},
             {"prompt": "Refined character design of {{character}}, {{art_style}}, detailed, high quality", "negative_prompt": "blurry, low quality, deformed, inconsistent", "description": "精修设计", "image_count": 1, "image_size": ""},
             {"prompt": "Character variation of {{character}}, {{art_style}}, different angle, {{pose}}", "negative_prompt": "blurry, low quality, deformed", "description": "角度变体", "image_count": 2, "image_size": ""},
-        ],
-    },
-    {
-        "name": "四季风景",
-        "description": "生成同一场景的春/夏/秋/冬四张风景图",
-        "strategy": "parallel",
-        "is_builtin": True,
-        "variables": [
-            {"key": "scene", "type": "string", "label": "场景描述", "default": "a peaceful lake with mountains", "required": True},
-            {"key": "art_style", "type": "string", "label": "风格", "default": "photorealistic landscape photography"},
-        ],
-        "steps": [
-            {"prompt": "{{scene}} in spring, cherry blossoms, fresh green, warm sunlight, {{art_style}}, 8k", "negative_prompt": "blurry, low quality", "description": "春", "image_count": 1, "image_size": ""},
-            {"prompt": "{{scene}} in summer, lush green, bright blue sky, golden sunlight, {{art_style}}, 8k", "negative_prompt": "blurry, low quality", "description": "夏", "image_count": 1, "image_size": ""},
-            {"prompt": "{{scene}} in autumn, red and golden leaves, misty atmosphere, {{art_style}}, 8k", "negative_prompt": "blurry, low quality", "description": "秋", "image_count": 1, "image_size": ""},
-            {"prompt": "{{scene}} in winter, snow covered, frozen lake, soft cold light, {{art_style}}, 8k", "negative_prompt": "blurry, low quality", "description": "冬", "image_count": 1, "image_size": ""},
         ],
     },
     {
