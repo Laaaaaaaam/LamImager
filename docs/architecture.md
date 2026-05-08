@@ -82,10 +82,11 @@ User Input (with optional attachments + reference images)
     ▼
 ┌──────────────────┐
 │ Sessions.vue     │  Chat input with file upload (base64)
-│                  │  Sends context_messages (last 10 msgs)
+│                  │  contextImageList strip with numbered badges
+│                  │  Sends context_messages with optional image_urls
 └────────┬─────────┘
          │ POST /api/sessions/{id}/generate
-         │  { prompt, reference_images, context_messages }
+         │  { prompt, reference_images, reference_labels, context_messages }
          ▼
 ┌──────────────────┐
 │ session.py router│  Validates input, creates message
@@ -93,16 +94,17 @@ User Input (with optional attachments + reference images)
          │
          ▼
 ┌──────────────────┐
-│ generate_service │  Applies skills/rules, injects context
+│ generate_service │  Applies skills/rules, builds multimodal context
 │                  │  Passes reference_images to ImageClient
+│                  │  reference_labels provide [图N] numbered mapping
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
 │ ImageClient      │  Image-to-Image 3-tier fallback:
-│                  │  Tier 1: chat_edit() → /v1/chat/completions (multimodal)
+│                  │  Tier 1: chat_edit() → /v1/chat/completions (multimodal, numbered labels)
 │                  │  Tier 2: edit()      → /v1/images/edits (native)
-│                  │  Tier 3: generate()  → /v1/images/generations (text-only via Vision LLM)
+│                  │  Tier 3: Vision LLM  → /v1/images/generations (text-only)
 └────────┬─────────┘
          │
          ▼
@@ -163,17 +165,41 @@ plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
 
 ## Billing
 
+### Cost Calculation
+- `calc_cost(provider, tokens_in, tokens_out, call_count)` in `billing_service.py` — unified formula for all paths
+  - `per_token`: `unit_price × (tokens_in + tokens_out) / 1000` (with fallback to `unit_price × call_count` when tokens unavailable)
+  - `per_call`: `unit_price × call_count`
+- `record_billing()` in `billing_service.py` — single entry point for creating billing records
+- All billing records use `provider.billing_type.value` (no hardcoded `"per_token"`)
+
+### Operation Types (detail.type)
+| Type | Label | Path |
+|---|---|---|
+| `image_gen` | 图像生成 | `handle_generate` |
+| `optimize` | 提示词优化 | `optimize_prompt`, `optimize_prompt_stream` |
+| `assistant` | 小助手对话 | `stream_llm_chat` (stream_type="assistant") |
+| `plan` | 规划生成 | `stream_llm_chat` (stream_type="plan") via `/api/prompt/plan` |
+| `vision` | 视觉分析 | `_describe_reference_images` |
+
 ### Image Generation
-- Per-call billing: Fixed cost per image
-- Per-token billing: Cost based on input/output tokens
+- Per-call billing: Call count = image_count
+- Per-token billing: Uses token usage from chat_edit API responses (Chat API returns usage; Images API does not)
 - Image-to-image: chat_edit charges via Chat API (per-token), edit charges via Images API
 
 ### LLM Services
-- Prompt optimization, LLM planning, assistant dialog
-- Image description via Vision LLM (fallback for img2img on unsupported providers)
-- Cost = unit_price × (tokens_in + tokens_out) / 1000
+- Prompt optimization, planning, assistant dialog all use per-token billing with API usage extraction
+- Vision fallback (image description) billed per token
+- Streaming via `/api/prompt/stream` and `/api/prompt/plan` (SSE)
 - Billing records created in `prompt_optimizer.py` and `generate_service.py`
-- Streaming via `/api/prompt/stream` (SSE), billed in `stream_llm_chat()`
+
+### Session Cost Aggregation
+- `list_sessions()` uses subqueries (`msg_subq` + `billing_subq`) to avoid cartesian product from dual OUTER JOINs
+- Session `cost` = SUM of all billing records for that session
+- Session `tokens` = SUM of all `tokens_in + tokens_out` for that session
+
+### Breakdown API
+- `GET /api/billing/breakdown` returns costs grouped by provider and by operation type
+- Frontend billing drawer displays both tables (API spending + operation type breakdown)
 
 ## Concurrency Model
 

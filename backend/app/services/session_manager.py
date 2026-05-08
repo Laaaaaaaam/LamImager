@@ -58,16 +58,32 @@ async def get_session(db: AsyncSession, session_id: str) -> Session | None:
 
 
 async def list_sessions(db: AsyncSession) -> list[dict]:
-    result = await db.execute(
+    msg_subq = (
         select(
-            Session,
+            Message.session_id,
             func.count(Message.id).label("message_count"),
+        )
+        .group_by(Message.session_id)
+        .subquery()
+    )
+    billing_subq = (
+        select(
+            BillingRecord.session_id,
             func.coalesce(func.sum(BillingRecord.cost), 0).label("cost"),
             func.coalesce(func.sum(BillingRecord.tokens_in + BillingRecord.tokens_out), 0).label("tokens"),
         )
-        .outerjoin(Message, Message.session_id == Session.id)
-        .outerjoin(BillingRecord, BillingRecord.session_id == Session.id)
-        .group_by(Session.id)
+        .group_by(BillingRecord.session_id)
+        .subquery()
+    )
+    result = await db.execute(
+        select(
+            Session,
+            func.coalesce(msg_subq.c.message_count, 0).label("message_count"),
+            func.coalesce(billing_subq.c.cost, 0).label("cost"),
+            func.coalesce(billing_subq.c.tokens, 0).label("tokens"),
+        )
+        .outerjoin(msg_subq, msg_subq.c.session_id == Session.id)
+        .outerjoin(billing_subq, billing_subq.c.session_id == Session.id)
         .order_by(Session.updated_at.desc())
     )
     response = []

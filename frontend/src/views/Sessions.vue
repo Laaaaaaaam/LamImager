@@ -55,7 +55,7 @@
               <p>{{ msg.content }}</p>
               <div class="image-grid">
                 <div v-for="(url, i) in (msg.metadata?.image_urls || [])" :key="i" class="image-item">
-                  <img :src="url" :alt="'图片 ' + (i + 1)" @click="openImage(url)" />
+                  <img :src="url" :alt="'图片 ' + (i + 1)" @click="openImage(url)" @contextmenu.prevent="showImageContextMenu($event, url)" />
                   <label class="image-check">
                     <input type="checkbox" :value="url" v-model="selectedImages" />
                   </label>
@@ -68,6 +68,9 @@
                 <button class="btn btn-sm" @click="downloadAll(msg.metadata?.image_urls || [])">全部下载</button>
                 <button class="btn btn-sm" @click="compareSelected" :disabled="selectedImages.length < 2">
                   对比选中
+                </button>
+                <button class="btn btn-sm" @click="enterRefineMode(msg)" :disabled="!selectedImages.length">
+                  精修({{ selectedImages.length }})
                 </button>
               </div>
             </template>
@@ -165,21 +168,29 @@
       </div>
 
       <div class="input-area">
+        <div class="refine-header" v-if="isRefineMode">
+          <span class="refine-label">精修模式</span>
+          <button class="btn btn-sm" @click="exitRefineMode">退出精修</button>
+        </div>
         <div class="input-main">
-          <div class="attachment-preview" v-if="attachments.length">
-            <div v-for="(file, i) in attachments" :key="i" class="attachment-item">
-              <img v-if="file.type.startsWith('image/')" :src="file.preview" class="attachment-thumb" />
-              <div v-else class="attachment-doc">
-                <span class="doc-icon">{{ file.name.split('.').pop()?.toUpperCase() || 'FILE' }}</span>
+          <div class="refine-strip" v-if="contextImageList.length">
+            <div v-for="(img, i) in contextImageList" :key="i" class="refine-strip-item">
+              <div class="refine-strip-thumb-wrap">
+                <img :src="img.preview || img.url" class="refine-strip-thumb" />
+                <span class="refine-strip-badge">{{ i + 1 }}</span>
               </div>
-              <span class="attachment-name">{{ file.name }}</span>
-              <button class="attachment-remove" @click="attachments.splice(i, 1)">x</button>
+              <span class="refine-strip-label">{{ img.source === 'upload' ? img.name : (img.source === 'refine' ? '精修' : '上下文') }}</span>
+              <button class="attachment-remove" @click="removeContextImage(i)">x</button>
             </div>
+            <label class="refine-add-btn" title="追加图片">
+              <input type="file" accept="image/*" multiple @change="handleFileUpload($event, 'image')" hidden />
+              + 追加
+            </label>
           </div>
           <textarea
             ref="mainTextarea"
             v-model="inputText"
-            placeholder="输入生图指令..."
+            :placeholder="isRefineMode ? '基于参考图进行修改...' : '输入生图指令...'"
             rows="2"
             @input="autoResizeTextarea"
             @keydown.enter.exact.prevent="sendGenerate"
@@ -234,7 +245,7 @@
               助手
             </button>
             <button class="btn btn-primary btn-sm" @click="sendGenerate" :disabled="!inputText.trim() || (currentSessionId && isSessionBusy(currentSessionId))">
-              {{ (currentSessionId && isSessionBusy(currentSessionId)) ? '任务进行中...' : '发送' }}
+              {{ (currentSessionId && isSessionBusy(currentSessionId)) ? '任务进行中...' : (isRefineMode ? '精修发送' : '发送') }}
             </button>
           </div>
         </div>
@@ -409,7 +420,6 @@
               </div>
             </div>
             <button class="btn btn-sm" @click="planSteps.push({ prompt: '', negative_prompt: '', description: '', image_count: 1 })">+ 添加步骤</button>
-            <button class="btn btn-sm" style="margin-left: 4px" @click="planSteps.push({ prompt: '', negative_prompt: '', description: '', image_count: 1 })">手动添加</button>
             <div class="plan-summary">
               预计生成: {{ planSteps.reduce((sum, s) => sum + (s.image_count || 1), 0) }} 张图片
             </div>
@@ -451,6 +461,10 @@
       <button @click="renameSession(contextMenu.sessionId!)">重命名</button>
       <button @click="deleteSession(contextMenu.sessionId!)">删除</button>
     </div>
+    <div v-if="imageContextMenu.show" class="context-menu" :style="{ left: imageContextMenu.x + 'px', top: imageContextMenu.y + 'px' }">
+      <button v-if="!isContextPinned(imageContextMenu.url)" @click="toggleContextPin(imageContextMenu.url)">加入上下文</button>
+      <button v-else @click="toggleContextPin(imageContextMenu.url)">从上下文移除</button>
+    </div>
   </div>
 </template>
 
@@ -485,6 +499,54 @@ const showAssistant = ref(false)
 const assistantTab = ref('dialog')
 const selectedImages = ref<string[]>([])
 const comparingImages = ref<string[]>([])
+const isRefineMode = ref(false)
+
+interface ContextImage {
+  url: string
+  source: 'upload' | 'context' | 'refine'
+  name: string
+  preview?: string
+}
+
+const contextImageList = ref<ContextImage[]>([])
+const contextImageUrls = computed(() => new Set(contextImageList.value.map(x => x.url)))
+
+function addContextImage(url: string, source: ContextImage['source'], name: string, preview?: string) {
+  if (contextImageUrls.value.has(url)) return
+  contextImageList.value.push({ url, source, name, preview })
+}
+
+function removeContextImage(index: number) {
+  const img = contextImageList.value[index]
+  if (!img) return
+  if (img.source === 'upload') {
+    const idx = attachments.value.findIndex(a => a.preview === img.url)
+    if (idx >= 0) attachments.value.splice(idx, 1)
+  }
+  contextImageList.value.splice(index, 1)
+}
+
+function clearContextImages() {
+  contextImageList.value = []
+}
+
+function refreshAutoContext() {
+  if (isRefineMode.value) return
+  const recentUrls: string[] = []
+  for (const m of messages.value) {
+    if (m.message_type === 'image' && m.metadata?.image_urls) {
+      for (const url of (m.metadata.image_urls as string[])) {
+        if (!contextImageUrls.value.has(url)) {
+          recentUrls.push(url)
+        }
+      }
+    }
+  }
+  for (const url of recentUrls.slice(-4)) {
+    contextImageList.value.push({ url, source: 'context', name: '已生成' })
+  }
+}
+
 const activeTasks = ref<Map<string, TaskHandle>>(new Map())
 const generatingText = ref('生成中...')
 const optimizing = ref(false)
@@ -596,6 +658,7 @@ const defaultModels = ref<DefaultModelsConfig>({
 })
 
 const contextMenu = ref({ show: false, x: 0, y: 0, sessionId: null as string | null })
+const imageContextMenu = ref({ show: false, x: 0, y: 0, url: '' })
 const messagesContainer = ref<HTMLElement | null>(null)
 let contextMenuTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -683,6 +746,7 @@ onUnmounted(() => {
 })
 
 watch(messages, () => {
+  refreshAutoContext()
   nextTick(() => {
     if (messagesContainer.value) {
       messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
@@ -718,6 +782,7 @@ async function handleFileUpload(event: Event, type: 'image' | 'doc') {
     
     if (file.type.startsWith('image/')) {
       attachment.preview = await readFileAsDataURL(file)
+      addContextImage(attachment.preview, 'upload', file.name, attachment.preview)
     } else {
       attachment.content = await readFileAsText(file)
     }
@@ -814,6 +879,7 @@ async function newSession() {
   inputText.value = ''
   negativePrompt.value = ''
   attachments.value = []
+  clearContextImages()
   imageCount.value = 1
   imageWidth.value = 1024
   imageHeight.value = 1024
@@ -827,6 +893,7 @@ async function newSession() {
 async function selectSession(id: string) {
   await store.selectSession(id)
   selectedImages.value = []
+  clearContextImages()
   inputText.value = ''
   negativePrompt.value = ''
   attachments.value = []
@@ -837,10 +904,11 @@ async function selectSession(id: string) {
   selectedDirections.value = []
   customInstruction.value = ''
   optimizeResult.value = ''
+  refreshAutoContext()
 }
 
 async function sendGenerate() {
-  if (!inputText.value.trim() && !attachments.value.length) return
+  if (!inputText.value.trim() && !contextImageList.value.length) return
   const sid = currentSessionId.value
   if (!sid || isSessionBusy(sid)) return
 
@@ -857,28 +925,60 @@ async function sendGenerate() {
 
   let promptWithContext = inputText.value
   const referenceImages: string[] = []
-  if (attachments.value.length) {
-    const imageContexts = attachments.value
-      .filter(a => a.type.startsWith('image/'))
-      .map(a => `[参考图片: ${a.name}]`)
-      .join('\n')
-    const docContexts = attachments.value
-      .filter(a => !a.type.startsWith('image/') && a.content)
-      .map(a => `\n[文档内容: ${a.name}]\n${a.content}`)
-      .join('\n')
-    if (imageContexts) promptWithContext = imageContexts + '\n' + promptWithContext
-    if (docContexts) promptWithContext = promptWithContext + '\n' + docContexts
-    for (const a of attachments.value) {
-      if (a.type.startsWith('image/') && a.preview) {
-        referenceImages.push(a.preview)
-      }
+
+  const uploadImages = contextImageList.value.filter(x => x.source === 'upload')
+  if (uploadImages.length) {
+    const labelLines = uploadImages.map((img, i) => `[图${i + 1}: ${img.name}]`).join('\n')
+    promptWithContext = labelLines + '\n' + promptWithContext
+    for (const img of uploadImages) {
+      if (img.preview) referenceImages.push(img.preview)
+      else if (img.url.startsWith('data:')) referenceImages.push(img.url)
     }
   }
 
-  const contextMessages = messages.value.slice(-10).map(m => ({
-    role: m.role,
-    content: m.content,
-  }))
+  const refineImages = contextImageList.value.filter(x => x.source === 'refine')
+  if (refineImages.length) {
+    const labelLines = refineImages.map((img, i) => `[图${uploadImages.length + i + 1}: ${img.name}]`).join('\n')
+    promptWithContext = labelLines + '\n' + promptWithContext
+    for (const img of refineImages) {
+      const base64 = await fetchImageAsBase64(img.url)
+      if (base64) referenceImages.push(base64)
+    }
+  }
+
+  const docs = attachments.value.filter(a => !a.type.startsWith('image/') && a.content)
+  if (docs.length) {
+    const docContexts = docs.map(a => `\n[文档内容: ${a.name}]\n${a.content}`).join('\n')
+    promptWithContext = promptWithContext + '\n' + docContexts
+  }
+
+  const ctxUrls = contextImageList.value
+    .filter(img => img.source === 'context')
+    .map(img => img.url)
+
+  const contextMessages = messages.value.slice(-10).map(m => {
+    const entry: { role: string; content: string; image_urls?: string[] } = {
+      role: m.role,
+      content: m.content,
+    }
+    if (m.message_type === 'image' && m.metadata?.image_urls && ctxUrls.length) {
+      const urls = (m.metadata.image_urls as string[]).filter((url: string) =>
+        ctxUrls.includes(url)
+      )
+      if (urls.length) {
+        entry.image_urls = urls
+      }
+    }
+    return entry
+  })
+
+  const refLabels = contextImageList.value
+    .filter(img => img.source !== 'context')
+    .map((img, i) => ({
+      index: i + 1,
+      source: img.source,
+      name: img.name,
+    }))
 
   try {
     await store.generate(sid, {
@@ -889,6 +989,7 @@ async function sendGenerate() {
       optimize_directions: selectedDirections.value.filter(d => d !== 'custom'),
       custom_optimize_instruction: customInstruction.value,
       reference_images: referenceImages.length ? referenceImages : undefined,
+      reference_labels: refLabels.length ? refLabels : undefined,
       context_messages: contextMessages,
       plan_strategy: '',
     })
@@ -896,6 +997,11 @@ async function sendGenerate() {
     negativePrompt.value = ''
     selectedImages.value = []
     attachments.value = []
+    clearContextImages()
+    if (isRefineMode.value) {
+      exitRefineMode()
+    }
+    refreshAutoContext()
   } catch (e: any) {
     dialog.showAlert('发送失败: ' + (e.message || '未知错误'))
     console.error('sendGenerate error:', e)
@@ -951,6 +1057,46 @@ function downloadSelected() {
 
 function compareSelected() {
   comparingImages.value = [...selectedImages.value]
+}
+
+function enterRefineMode(_msg?: any) {
+  isRefineMode.value = true
+  clearContextImages()
+  selectedImages.value.forEach((url, i) => {
+    addContextImage(url, 'refine', `图${i + 1}`)
+  })
+  selectedImages.value = []
+  inputText.value = ''
+}
+
+function exitRefineMode() {
+  isRefineMode.value = false
+  clearContextImages()
+  refreshAutoContext()
+}
+
+async function fetchImageAsBase64(url: string): Promise<string> {
+  if (url.startsWith('data:')) return url
+  try {
+    const resp = await fetch(url)
+    if (resp.ok) {
+      const blob = await resp.blob()
+      return await new Promise<string>((resolve) => {
+        const reader = new FileReader()
+        reader.onloadend = () => resolve(reader.result as string)
+        reader.readAsDataURL(blob)
+      })
+    }
+  } catch {}
+  const proxyUrl = `/api/images/proxy?url=${encodeURIComponent(url)}`
+  const resp = await fetch(proxyUrl)
+  if (!resp.ok) return ''
+  const blob = await resp.blob()
+  return await new Promise<string>((resolve) => {
+    const reader = new FileReader()
+    reader.onloadend = () => resolve(reader.result as string)
+    reader.readAsDataURL(blob)
+  })
 }
 
 function applyOptimized(text: string) {
@@ -1067,7 +1213,7 @@ async function doOptimize() {
       await sessionApi.addMessage(currentSessionId.value, {
         content: '提示词优化完成',
         message_type: 'optimization',
-        metadata: { type: 'optimize', direction, original: inputText.value, optimized: fullContent },
+        metadata: { type: 'optimize', direction: directions, original: inputText.value, optimized: fullContent },
       })
     }
 
@@ -1146,7 +1292,7 @@ async function doPlan() {
 
     let fullContent = ''
     streamAbortController = new AbortController()
-    const stream = promptApi.streamChat([
+    const stream = promptApi.planStream([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: inputText.value },
     ], defaultModels.value.default_plan_provider_id || '', currentSessionId.value, 0.7, streamAbortController.signal)
@@ -1237,8 +1383,37 @@ async function executePlan() {
 
   let lastStepImageUrls: string[] = []
 
+  const initialRefs: string[] = []
+  for (const img of contextImageList.value) {
+    if (img.preview && img.source === 'upload') {
+      initialRefs.push(img.preview)
+    } else if (img.source === 'refine' || img.source === 'context') {
+      const base64 = await fetchImageAsBase64(img.url)
+      if (base64) initialRefs.push(base64)
+    }
+  }
+
   async function runStep(step: PlanStep, index: number, referenceImages?: string[]) {
     try {
+      const ctxUrls = contextImageList.value
+        .filter(img => img.source === 'context')
+        .map(img => img.url)
+      const ctxMsgs = messages.value.slice(-10).map(m => {
+        const entry: { role: string; content: string; image_urls?: string[] } = {
+          role: m.role,
+          content: m.content,
+        }
+        if (m.message_type === 'image' && m.metadata?.image_urls && ctxUrls.length) {
+          const urls = (m.metadata.image_urls as string[]).filter(url => ctxUrls.includes(url))
+          if (urls.length) entry.image_urls = urls
+        }
+        return entry
+      })
+      const refLabels = (referenceImages || []).map((_, i) => ({
+        index: i + 1,
+        source: 'refine' as const,
+        name: `步骤${index + 1}参考图${i + 1}`,
+      }))
       const result = await store.generate(sid, {
         prompt: step.prompt,
         negative_prompt: step.negative_prompt,
@@ -1246,6 +1421,8 @@ async function executePlan() {
         image_size: step.image_size || (noSizeLimit.value ? undefined : `${imageWidth.value}x${imageHeight.value}`),
         plan_strategy: strategy,
         reference_images: referenceImages,
+        context_messages: ctxMsgs.length ? ctxMsgs : undefined,
+        reference_labels: refLabels.length ? refLabels : undefined,
       })
       if (result?.image_urls?.length) {
         lastStepImageUrls = result.image_urls
@@ -1256,20 +1433,6 @@ async function executePlan() {
       completed++
       const task = activeTasks.value.get(sid)
       if (task) task.progress = completed
-    }
-  }
-
-  async function fetchImageAsBase64(url: string): Promise<string> {
-    try {
-      const resp = await fetch(url)
-      const blob = await resp.blob()
-      return await new Promise<string>((resolve) => {
-        const reader = new FileReader()
-        reader.onloadend = () => resolve(reader.result as string)
-        reader.readAsDataURL(blob)
-      })
-    } catch {
-      return ''
     }
   }
 
@@ -1294,7 +1457,7 @@ async function executePlan() {
       workers.push((async () => {
         while (nextIndex < steps.length) {
           const idx = nextIndex++
-          await runStepWithCheckpoint(steps[idx], idx)
+          await runStepWithCheckpoint(steps[idx], idx, initialRefs.length ? initialRefs : undefined)
         }
       })())
     }
@@ -1304,7 +1467,9 @@ async function executePlan() {
       const task = activeTasks.value.get(sid)
       if (task) generatingText.value = `迭代 ${i + 1}/${steps.length}`
       let refs: string[] | undefined
-      if (i > 0 && lastStepImageUrls.length) {
+      if (i === 0 && initialRefs.length) {
+        refs = initialRefs
+      } else if (i > 0 && lastStepImageUrls.length) {
         const base64 = await fetchImageAsBase64(lastStepImageUrls[0])
         if (base64) refs = [base64]
       }
@@ -1314,7 +1479,7 @@ async function executePlan() {
     for (let i = 0; i < steps.length; i++) {
       const task = activeTasks.value.get(sid)
       if (task) generatingText.value = `步骤 ${i + 1}/${steps.length}`
-      await runStepWithCheckpoint(steps[i], i)
+      await runStepWithCheckpoint(steps[i], i, initialRefs.length ? initialRefs : undefined)
     }
   }
 
@@ -1420,6 +1585,26 @@ function showContextMenu(e: MouseEvent, session: any) {
   if (contextMenuTimer) clearTimeout(contextMenuTimer)
   contextMenu.value = { show: true, x: e.clientX, y: e.clientY, sessionId: session.id }
   contextMenuTimer = setTimeout(() => { contextMenu.value.show = false }, 3000)
+}
+
+function showImageContextMenu(e: MouseEvent, url: string) {
+  if (contextMenuTimer) clearTimeout(contextMenuTimer)
+  imageContextMenu.value = { show: true, x: e.clientX, y: e.clientY, url }
+  contextMenuTimer = setTimeout(() => { imageContextMenu.value.show = false }, 3000)
+}
+
+function isContextPinned(url: string): boolean {
+  return contextImageUrls.value.has(url)
+}
+
+function toggleContextPin(url: string) {
+  if (contextImageUrls.value.has(url)) {
+    const idx = contextImageList.value.findIndex(x => x.url === url)
+    if (idx >= 0) contextImageList.value.splice(idx, 1)
+  } else {
+    contextImageList.value.push({ url, source: 'context', name: '已固定' })
+  }
+  imageContextMenu.value.show = false
 }
 
 async function renameSession(id: string) {
@@ -1886,6 +2071,96 @@ watch(selectedSkillIds, (ids) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.refine-strip {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 8px;
+  flex-wrap: wrap;
+  min-height: 32px;
+}
+
+.refine-strip-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.refine-strip-thumb {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.refine-strip-thumb-wrap {
+  position: relative;
+  width: 36px;
+  height: 36px;
+}
+
+.refine-strip-badge {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: white;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.refine-strip-label {
+  font-size: 9px;
+  color: var(--text-secondary);
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.refine-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px dashed var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+
+.refine-add-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.refine-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: #f0f0f0;
+  border-bottom: 1px solid var(--border);
+}
+
+.refine-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
 }
 
 .attachment-remove {

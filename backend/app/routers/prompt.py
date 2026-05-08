@@ -17,6 +17,7 @@ class StreamRequest(BaseModel):
     provider_id: str
     session_id: str | None = None
     temperature: float = 0.7
+    stream_type: str = "assistant"
 
 
 @router.post("/optimize", response_model=PromptOptimizeResponse)
@@ -36,6 +37,14 @@ async def api_optimize_prompt_stream(data: PromptOptimizeRequest, db: AsyncSessi
 @router.post("/stream")
 async def api_stream_chat(data: StreamRequest, db: AsyncSession = Depends(get_db)):
     return StreamingResponse(
-        stream_llm_chat(db, data.provider_id, data.messages, data.temperature, data.session_id),
+        stream_llm_chat(db, data.provider_id, data.messages, data.temperature, data.session_id, data.stream_type),
+        media_type="text/event-stream",
+    )
+
+
+@router.post("/plan")
+async def api_plan_stream(data: StreamRequest, db: AsyncSession = Depends(get_db)):
+    return StreamingResponse(
+        stream_llm_chat(db, data.provider_id, data.messages, data.temperature, data.session_id, "plan"),
         media_type="text/event-stream",
     )

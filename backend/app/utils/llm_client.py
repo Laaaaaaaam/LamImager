@@ -86,7 +86,8 @@ class LLMClient:
                             import json
                             try:
                                 chunk = json.loads(data_str)
-                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                choices = chunk.get("choices") or [{}]
+                                delta = choices[0].get("delta", {}) if choices else {}
                                 content = delta.get("content", "")
                                 usage = chunk.get("usage")
                                 usage_data = None

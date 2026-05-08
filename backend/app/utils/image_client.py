@@ -73,21 +73,27 @@ class ImageClient:
         images: list[str],
         n: int = 1,
         size: str = "1024x1024",
+        reference_labels: list[dict] | None = None,
         **kwargs,
     ) -> dict:
         url = f"{self.base_url}/v1/chat/completions"
 
-        clean_prompt = re.sub(r'\[参考图片:\s*[^\]]+\]\s*\n?', '', prompt).strip()
-        if not clean_prompt:
-            clean_prompt = prompt.strip()
+        labels = reference_labels or []
+        image_label_lines = []
+        for i in range(len(images)):
+            name = labels[i]["name"] if i < len(labels) else f"图片{i+1}"
+            image_label_lines.append(f"  [图{i+1}]: {name}")
+        label_hint = ""
+        if image_label_lines:
+            label_hint = "你收到了以下参考图片，编号与图片顺序一一对应：\n" + "\n".join(image_label_lines) + "\n\n"
 
         content_parts: list[dict] = []
         content_parts.append({
             "type": "text",
             "text": (
-                f"根据我上传的参考图片，生成一张新图片。"
-                f"严格遵循以下指令修改图片，保持与原图一致的构图和主体，只改变风格。"
-                f"直接返回生成的图片，不要描述或解释。\n\n指令: {clean_prompt}"
+                f"{label_hint}"
+                f"请根据参考图片和以下指令生成新图片。"
+                f"直接返回生成的图片，不要描述或解释。\n\n指令: {prompt}"
             ),
         })
         for img in images:

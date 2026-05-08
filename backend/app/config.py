@@ -11,6 +11,8 @@ class Settings(BaseSettings):
 
     APP_NAME: str = "LamImager"
     APP_VERSION: str = "0.1.0"
+    APP_AUTHOR: str = "霖二 @Laaaaaaaam"
+    APP_AUTHOR_EMAIL: str = "2667605815@qq.com"
     DEBUG: bool = True
 
     BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent

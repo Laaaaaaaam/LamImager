@@ -53,5 +53,6 @@ class GenerateRequest(BaseModel):
     optimize_directions: list[str] = []
     custom_optimize_instruction: str = ""
     reference_images: list[str] = []
+    reference_labels: list[dict] = []
     context_messages: list[dict] = []
     plan_strategy: str = ""

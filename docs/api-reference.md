@@ -166,7 +166,8 @@ Body:
   "optimize_directions": ["detail_enhancement"],
   "custom_optimize_instruction": "",
   "reference_images": ["data:image/png;base64,..."],
-  "context_messages": [{"role": "user", "content": "..."}],
+  "reference_labels": [{"index": 1, "source": "upload", "name": "photoA.png"}],
+  "context_messages": [{"role": "user", "content": "...", "image_urls": ["http://localhost:8000/api/images/xxx.png"]}],
   "plan_strategy": "parallel"
 }
 ```
@@ -174,9 +175,12 @@ Body:
 Response: `Message` (assistant message with generated images)
 
 > **Image-to-Image**: When `reference_images` is non-empty, the backend uses a 3-tier fallback:
-> 1. `POST /v1/chat/completions` with multimodal messages (works with most proxies)
+> 1. `POST /v1/chat/completions` with multimodal messages + numbered labels (图1, 图2...)
 > 2. `POST /v1/images/edits` (native OpenAI, may fail on some proxies)
 > 3. Vision LLM description → `POST /v1/images/generations` (text-only fallback)
+>
+> **Multimodal Context**: `context_messages` can include `image_urls` for LLM visual context.
+> When present, backend builds multimodal messages via `_build_multimodal_context()`.
 
 ---
 
@@ -425,6 +429,29 @@ Query Parameters:
 
 Response: `text/csv` attachment
 
+### Get Breakdown
+```
+GET /api/billing/breakdown
+```
+
+Response:
+```json
+{
+  "by_provider": [
+    {"provider_id": "uuid", "nickname": "GPT-Image-2", "cost": 5.70, "tokens": 18011}
+  ],
+  "by_type": [
+    {"type": "image_gen", "label": "图像生成", "cost": 5.70, "tokens": 18011, "count": 53},
+    {"type": "optimize", "label": "提示词优化", "cost": 0.01, "tokens": 5000, "count": 5},
+    {"type": "assistant", "label": "小助手对话", "cost": 0.02, "tokens": 8000, "count": 10},
+    {"type": "plan", "label": "规划生成", "cost": 0.01, "tokens": 3000, "count": 2},
+    {"type": "vision", "label": "视觉分析", "cost": 0.005, "tokens": 2000, "count": 1}
+  ]
+}
+```
+
+Operation types: `image_gen` | `optimize` | `assistant` | `plan` | `vision`
+
 ---
 
 ## References
@@ -483,13 +510,17 @@ Body:
 {
   "prompt": "A cat sitting on a chair",
   "direction": "detail_enhancement",
-  "llm_provider_id": "uuid"
+  "llm_provider_id": "uuid",
+  "session_id": "uuid",
+  "multimodal_context": null
 }
 ```
 
 Directions: `detail_enhancement` | `style_unification` | `composition_optimization` | `color_adjustment` | `lighting_enhancement` | `custom:<instruction>`
 
 Multiple directions can be combined with comma: `detail_enhancement,style_unification`
+
+Optional field `session_id` links billing record to session.
 
 Response:
 ```json
@@ -531,14 +562,29 @@ Body:
 {
   "messages": [{"role": "user", "content": "Hello"}],
   "provider_id": "uuid",
-  "temperature": 0.7
+  "session_id": "uuid",
+  "temperature": 0.7,
+  "stream_type": "assistant"
 }
 ```
+
+`stream_type`: `"assistant"` (default) for general chat, used for billing categorization.
 
 SSE Events:
 - `data: {"token": "word"}` - Each generated token
 - `data: {"done": true, "cost": 0.001}` - Completion event with billing
 - `data: {"error": "message"}` - Error event
+
+### Stream Plan Generation
+```
+POST /api/prompt/plan
+```
+
+Content-Type: `text/event-stream` (SSE)
+
+Body: Same as Stream LLM Chat. Billing recorded with `type: "plan"`.
+
+SSE Events: Same format as Stream LLM Chat (token-by-token).
 
 ---
 

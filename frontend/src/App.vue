@@ -71,6 +71,47 @@
             <span class="billing-label">累计</span>
           </div>
         </div>
+
+        <div v-if="breakdown" class="billing-breakdown">
+          <div class="billing-section">
+            <h4 class="billing-section-title">API 花费</h4>
+            <table class="billing-table">
+              <thead>
+                <tr><th>API</th><th>花费</th><th>Token</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in breakdown.by_provider" :key="p.provider_id">
+                  <td>{{ p.nickname }}</td>
+                  <td>¥{{ p.cost.toFixed(4) }}</td>
+                  <td>{{ p.tokens >= 1000 ? (p.tokens / 1000).toFixed(1) + 'k' : p.tokens }}</td>
+                </tr>
+                <tr v-if="!breakdown.by_provider.length">
+                  <td colspan="3" class="empty-cell">暂无数据</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="billing-section">
+            <h4 class="billing-section-title">操作类型</h4>
+            <table class="billing-table">
+              <thead>
+                <tr><th>类型</th><th>次数</th><th>花费</th><th>Token</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="t in breakdown.by_type" :key="t.type">
+                  <td>{{ t.label }}</td>
+                  <td>{{ t.count }}</td>
+                  <td>¥{{ t.cost.toFixed(4) }}</td>
+                  <td>{{ t.tokens >= 1000 ? (t.tokens / 1000).toFixed(1) + 'k' : t.tokens }}</td>
+                </tr>
+                <tr v-if="!breakdown.by_type.length">
+                  <td colspan="4" class="empty-cell">暂无数据</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div class="billing-actions">
           <button class="btn" @click="exportCsv">导出 CSV</button>
         </div>
@@ -81,13 +122,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useBillingStore } from './stores/billing'
 import { dialog } from './composables/useDialog'
 import { billingApi } from './api/billing'
 import { settingsApi } from './api/settings'
+import type { BillingBreakdown } from './types'
 import {
   MessageSquare,
   Server,
@@ -105,6 +147,7 @@ const router = useRouter()
 const billingStore = useBillingStore()
 const showBilling = ref(false)
 const sidebarCollapsed = ref(false)
+const breakdown = ref<BillingBreakdown | null>(null)
 
 const pageTitles: Record<string, string> = {
   sessions: '会话',
@@ -143,6 +186,19 @@ onMounted(async () => {
 onUnmounted(() => {
   delete (window as any).toggleAssistant
   delete (window as any).navigateTo
+})
+
+watch(showBilling, async (show) => {
+  if (show) {
+    billingStore.fetchSummary()
+    try {
+      const { data } = await billingApi.breakdown()
+      console.log('breakdown loaded:', data)
+      breakdown.value = data
+    } catch (e) {
+      console.error('breakdown fetch failed:', e)
+    }
+  }
 })
 
 async function exportCsv() {
@@ -329,5 +385,49 @@ async function exportCsv() {
 
 .billing-drawer {
   width: 360px;
+}
+
+.billing-breakdown {
+  margin-bottom: 16px;
+}
+
+.billing-section {
+  margin-bottom: 16px;
+}
+
+.billing-section-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  color: var(--text-primary);
+}
+
+.billing-table {
+  width: 100%;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+
+.billing-table th,
+.billing-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-bottom: 1px solid var(--border);
+}
+
+.billing-table th {
+  color: var(--text-secondary);
+  font-weight: 500;
+  font-size: 11px;
+}
+
+.billing-table td {
+  color: var(--text-primary);
+}
+
+.billing-table .empty-cell {
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 12px 8px;
 }
 </style>

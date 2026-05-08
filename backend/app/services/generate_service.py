@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_provider import ApiProvider, ProviderType
-from app.models.billing import BillingRecord, BillingRecordType
+from app.services.billing_service import record_billing, calc_cost
 from app.schemas.session import GenerateRequest
 from app.schemas.prompt import PromptOptimizeRequest
 from app.services.session_manager import add_message, add_system_message, message_to_response
@@ -55,8 +55,11 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
         prompt = result_context.get("prompt", prompt)
         data.negative_prompt = result_context.get("negative_prompt", data.negative_prompt)
 
+    multimodal_context = None
+
     if data.context_messages:
         context_parts = []
+        multimodal_context = None
         for msg in data.context_messages[-10:]:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -64,6 +67,8 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
                 context_parts.append(f"[User]: {content}")
             elif role == "assistant":
                 context_parts.append(f"[Assistant]: {content}")
+        if any(msg.get("image_urls") for msg in data.context_messages):
+            multimodal_context = _build_multimodal_context(data.context_messages)
         if context_parts:
             prompt = f"Context:\n{chr(10).join(context_parts)}\n\nCurrent request: {prompt}"
 
@@ -79,6 +84,8 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
                     prompt=prompt,
                     direction=direction,
                     llm_provider_id=provider_id,
+                    multimodal_context=multimodal_context,
+                    session_id=session_id,
                 ))
                 await add_system_message(db, session_id,
                     "提示词优化完成",
@@ -121,7 +128,13 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
         await add_system_message(db, session_id, "图像生成API未找到", message_type="error")
         return {"error": "Image provider not found"}
 
-    api_key = decrypt(provider.api_key_enc)
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception as e:
+        task_manager.update_task(session_id, TaskStatus.ERROR, message="API密钥解密失败")
+        await add_system_message(db, session_id, "API密钥解密失败，请重新在API管理中配置密钥（机器指纹可能已变更）", message_type="error")
+        return {"error": f"API key decryption failed: {e}"}
+
     client = ImageClient(provider.base_url, api_key, provider.model_id)
 
     try:
@@ -130,12 +143,17 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
         task_manager.update_task(session_id, TaskStatus.GENERATING, progress=0, total=data.image_count, message=f"生成中 0/{data.image_count}")
 
         if data.reference_images:
+            chat_edit_usage = {}
             result = await _generate_with_references(
-                db, session_id, client, provider, prompt, data, all_image_urls, semaphore
+                db, session_id, client, provider, prompt, data, all_image_urls, semaphore, chat_edit_usage
             )
             if result:
                 return result
+            tokens_in = chat_edit_usage.get("tokens_in", 0)
+            tokens_out = chat_edit_usage.get("tokens_out", 0)
         else:
+            tokens_in = 0
+            tokens_out = 0
             async def generate_one(idx):
                 async with semaphore:
                     try:
@@ -155,18 +173,19 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
             for urls in results:
                 all_image_urls.extend(urls)
 
-        cost = _compute_cost(provider, data.image_count)
+        cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=data.image_count)
 
-        billing = BillingRecord(
+        await record_billing(
+            db,
             session_id=session_id,
             provider_id=provider.id,
-            billing_type=BillingRecordType(provider.billing_type.value),
+            billing_type=provider.billing_type.value,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             cost=cost,
             currency=provider.currency,
-            detail={"prompt": prompt, "image_count": data.image_count, "image_size": data.image_size},
+            detail={"type": "image_gen", "prompt": prompt[:200], "image_count": data.image_count, "image_size": data.image_size},
         )
-        db.add(billing)
-        await db.commit()
 
         await add_system_message(db, session_id,
             f"已生成{len(all_image_urls)} 张图片",
@@ -204,13 +223,17 @@ async def _get_default_provider(db: AsyncSession, setting_key: str) -> str | Non
     return None
 
 
-async def _describe_reference_images(db: AsyncSession, provider_id: str, reference_images: list[str]) -> str:
+async def _describe_reference_images(db: AsyncSession, provider_id: str, reference_images: list[str], session_id: str | None = None) -> str:
     result = await db.execute(select(ApiProvider).where(ApiProvider.id == provider_id))
     provider = result.scalar_one_or_none()
     if not provider:
         raise ValueError("LLM provider not found")
 
-    api_key = decrypt(provider.api_key_enc)
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception as e:
+        raise ValueError(f"LLM API key decryption failed: {e}") from e
+
     client = LLMClient(provider.base_url, api_key, provider.model_id)
 
     content_parts: list[dict] = []
@@ -239,31 +262,21 @@ async def _describe_reference_images(db: AsyncSession, provider_id: str, referen
     tokens_in = response.get("usage", {}).get("prompt_tokens", 0)
     tokens_out = response.get("usage", {}).get("completion_tokens", 0)
 
-    cost = 0.0
-    if provider.billing_type.value == "per_token" and provider.unit_price:
-        cost = float(provider.unit_price) * (tokens_in + tokens_out) / 1000
+    cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=1)
 
-    billing = BillingRecord(
+    await record_billing(
+        db,
+        session_id=session_id,
         provider_id=provider.id,
-        billing_type=BillingRecordType.per_token,
+        billing_type=provider.billing_type.value,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost=cost,
         currency=provider.currency,
-        detail={"type": "image_description", "image_count": len(reference_images)},
+        detail={"type": "vision", "image_count": len(reference_images)},
     )
-    db.add(billing)
-    await db.commit()
 
     return description
-
-
-def _compute_cost(provider: ApiProvider, image_count: int) -> float:
-    if provider.billing_type.value == "per_call":
-        return float(provider.unit_price) * image_count
-    elif provider.billing_type.value == "per_token":
-        return float(provider.unit_price)
-    return 0.0
 
 
 async def _generate_with_references(
@@ -275,13 +288,18 @@ async def _generate_with_references(
     data: GenerateRequest,
     all_image_urls: list[str],
     semaphore: asyncio.Semaphore,
+    chat_edit_tokens: dict,
 ) -> dict | None:
     try:
         response = await client.chat_edit(
             prompt=prompt,
             images=data.reference_images,
+            reference_labels=data.reference_labels,
         )
         urls = ImageClient.extract_images_from_chat(response)
+        usage = response.get("usage", {})
+        chat_edit_tokens["tokens_in"] = chat_edit_tokens.get("tokens_in", 0) + usage.get("prompt_tokens", 0)
+        chat_edit_tokens["tokens_out"] = chat_edit_tokens.get("tokens_out", 0) + usage.get("completion_tokens", 0)
         if urls:
             all_image_urls.extend(urls)
             await add_system_message(db, session_id,
@@ -297,8 +315,13 @@ async def _generate_with_references(
                             response = await client.chat_edit(
                                 prompt=prompt,
                                 images=data.reference_images,
+                                reference_labels=data.reference_labels,
                             )
-                            return ImageClient.extract_images_from_chat(response)
+                            urls_result = ImageClient.extract_images_from_chat(response)
+                            c_usage = response.get("usage", {})
+                            chat_edit_tokens["tokens_in"] = chat_edit_tokens.get("tokens_in", 0) + c_usage.get("prompt_tokens", 0)
+                            chat_edit_tokens["tokens_out"] = chat_edit_tokens.get("tokens_out", 0) + c_usage.get("completion_tokens", 0)
+                            return urls_result
                         except Exception as e:
                             logger.error(f"Chat edit #{idx} failed: {e}")
                             return []
@@ -404,7 +427,7 @@ async def _apply_vision_fallback(
 
     if llm_provider_id:
         try:
-            image_desc = await _describe_reference_images(db, llm_provider_id, reference_images)
+            image_desc = await _describe_reference_images(db, llm_provider_id, reference_images, session_id)
             await add_system_message(db, session_id,
                 f"已分析 {len(reference_images)} 张参考图片并融入提示词",
                 message_type="text",
@@ -419,3 +442,24 @@ async def _apply_vision_fallback(
             )
 
     return prompt
+
+
+def _build_multimodal_context(messages: list[dict]) -> list[dict]:
+    content_parts: list[dict] = []
+    content_parts.append({
+        "type": "text",
+        "text": "以下是对话上下文中的图片，供你参考以理解当前任务的视觉风格和内容：",
+    })
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role == "user":
+            content_parts.append({"type": "text", "text": f"[User]: {content}"})
+        elif role == "assistant":
+            content_parts.append({"type": "text", "text": f"[Assistant]: {content}"})
+        for img_url in (msg.get("image_urls") or []):
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": img_url, "detail": "auto"},
+            })
+    return content_parts

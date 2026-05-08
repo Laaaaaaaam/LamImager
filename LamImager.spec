@@ -72,7 +72,7 @@ exe = EXE(
     strip=False,
     upx=True,
     console=False,
-    icon='desktop/assets/icon.ico',
+    icon='desktop/assets/lamimager.ico',
 )
 
 coll = COLLECT(

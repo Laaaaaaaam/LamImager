@@ -77,6 +77,22 @@ export interface BillingRecord {
   created_at: string
 }
 
+export interface BillingBreakdown {
+  by_provider: Array<{
+    provider_id: string
+    nickname: string
+    cost: number
+    tokens: number
+  }>
+  by_type: Array<{
+    type: string
+    label: string
+    cost: number
+    tokens: number
+    count: number
+  }>
+}
+
 export interface ReferenceImage {
   id: string
   name: string
@@ -144,7 +160,8 @@ export interface GenerateRequest {
   optimize_directions?: string[]
   custom_optimize_instruction?: string
   reference_images?: string[]
-  context_messages?: { role: string; content: string }[]
+  reference_labels?: { index: number; source: string; name: string }[]
+  context_messages?: { role: string; content: string; image_urls?: string[] }[]
   plan_strategy?: string
 }
 

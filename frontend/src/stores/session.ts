@@ -76,7 +76,7 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  async function generate(sessionId: string, data: { prompt: string; negative_prompt?: string; image_count?: number; image_size?: string | undefined; optimize_directions?: string[]; custom_optimize_instruction?: string; reference_images?: string[]; context_messages?: { role: string; content: string }[]; plan_strategy?: string }) {
+  async function generate(sessionId: string, data: { prompt: string; negative_prompt?: string; image_count?: number; image_size?: string | undefined; optimize_directions?: string[]; custom_optimize_instruction?: string; reference_images?: string[]; reference_labels?: { index: number; source: string; name: string }[]; context_messages?: { role: string; content: string; image_urls?: string[] }[]; plan_strategy?: string }) {
     try {
       const { data: result } = await sessionApi.generate({
         ...data,

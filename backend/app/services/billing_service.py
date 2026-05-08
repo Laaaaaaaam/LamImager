@@ -10,6 +10,18 @@ from app.models.billing import BillingRecord
 from app.schemas.billing import BillingDetailQuery, BillingRecordResponse, BillingSummary
 
 
+def calc_cost(provider, tokens_in: int = 0, tokens_out: int = 0, call_count: int = 1) -> float:
+    total_tokens = tokens_in + tokens_out
+    unit_price = float(provider.unit_price or 0)
+    if provider.billing_type.value == "per_token" and total_tokens > 0:
+        return unit_price * total_tokens / 1000
+    elif provider.billing_type.value == "per_token":
+        return unit_price * call_count
+    elif provider.billing_type.value == "per_call":
+        return unit_price * call_count
+    return 0.0
+
+
 async def record_billing(
     db: AsyncSession,
     session_id: str = None,
@@ -125,3 +137,70 @@ def billing_to_response(record: BillingRecord) -> dict:
         "detail": record.detail or {},
         "created_at": record.created_at,
     }
+
+
+async def get_breakdown(db: AsyncSession) -> dict:
+    from app.models.api_provider import ApiProvider
+
+    provider_result = await db.execute(
+        select(
+            BillingRecord.provider_id,
+            ApiProvider.nickname,
+            func.coalesce(func.sum(BillingRecord.cost), 0).label("cost"),
+            func.coalesce(func.sum(BillingRecord.tokens_in + BillingRecord.tokens_out), 0).label("tokens"),
+        )
+        .outerjoin(ApiProvider, ApiProvider.id == BillingRecord.provider_id)
+        .group_by(BillingRecord.provider_id)
+        .order_by(func.sum(BillingRecord.cost).desc())
+    )
+    by_provider = [
+        {
+            "provider_id": row[0] or "",
+            "nickname": row[1] or "unknown",
+            "cost": round(float(row[2]), 4),
+            "tokens": int(row[3]),
+        }
+        for row in provider_result
+    ]
+
+    type_result = await db.execute(
+        select(
+            func.json_extract(BillingRecord.detail, "$.type").label("type"),
+            BillingRecord.billing_type,
+            func.coalesce(func.sum(BillingRecord.cost), 0).label("cost"),
+            func.coalesce(func.sum(BillingRecord.tokens_in + BillingRecord.tokens_out), 0).label("tokens"),
+            func.count(BillingRecord.id).label("count"),
+        )
+        .group_by(func.json_extract(BillingRecord.detail, "$.type"), BillingRecord.billing_type)
+        .order_by(func.sum(BillingRecord.cost).desc())
+    )
+    TYPE_LABELS = {
+        "image_gen": "图像生成",
+        "optimize": "提示词优化",
+        "llm_chat": "提示词优化",
+        "assistant": "小助手对话",
+        "llm_stream": "小助手对话",
+        "plan": "规划生成",
+        "task_planning": "规划生成",
+        "vision": "视觉分析",
+        "image_description": "视觉分析",
+    }
+    by_type = []
+    for row in type_result:
+        raw_type = row[0]
+        billing_t = row[1].value if hasattr(row[1], "value") else str(row[1])
+        if raw_type is None:
+            label = "图像生成" if billing_t == "per_call" else "其他"
+            key = "image_gen" if billing_t == "per_call" else "unknown"
+        else:
+            label = TYPE_LABELS.get(raw_type, raw_type)
+            key = raw_type
+        by_type.append({
+            "type": key,
+            "label": label,
+            "cost": round(float(row[2]), 4),
+            "tokens": int(row[3]),
+            "count": row[4],
+        })
+
+    return {"by_provider": by_provider, "by_type": by_type}

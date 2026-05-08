@@ -76,8 +76,8 @@ async def test_connection(db: AsyncSession, provider_id: str) -> dict:
     if not provider:
         return {"success": False, "message": "Provider not found"}
 
-    api_key = decrypt(provider.api_key_enc)
     try:
+        api_key = decrypt(provider.api_key_enc)
         if provider.provider_type == ProviderType.llm:
             client = LLMClient(provider.base_url, api_key, provider.model_id)
             success = await client.test_connection()
@@ -94,7 +94,10 @@ async def test_connection(db: AsyncSession, provider_id: str) -> dict:
 
 
 def provider_to_response(provider: ApiProvider) -> dict:
-    api_key_masked = mask_key(decrypt(provider.api_key_enc)) if provider.api_key_enc else ""
+    try:
+        api_key_masked = mask_key(decrypt(provider.api_key_enc)) if provider.api_key_enc else ""
+    except Exception:
+        api_key_masked = "****DECRYPT_ERROR"
     return {
         "id": provider.id,
         "nickname": provider.nickname,

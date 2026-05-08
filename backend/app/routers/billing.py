@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.billing import BillingDetailQuery, BillingSummary
-from app.services.billing_service import export_billing_csv, get_details, get_summary
+from app.services.billing_service import export_billing_csv, get_breakdown, get_details, get_summary
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
@@ -48,3 +48,8 @@ async def api_billing_export(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=billing_export.csv"},
     )
+
+
+@router.get("/breakdown")
+async def api_billing_breakdown(db: AsyncSession = Depends(get_db)):
+    return await get_breakdown(db)

@@ -1,10 +1,17 @@
+__author__ = "霖二 @Laaaaaaaam"
+__copyright__ = "Copyright (c) 2026 霖二 @Laaaaaaaam"
+__license__ = "MIT"
+__email__ = "2667605815@qq.com"
+
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import unquote
 
-from fastapi import FastAPI, Request
+import aiohttp
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from app.config import settings
 from app.database import init_db
@@ -45,7 +52,12 @@ app.include_router(plan_template.router)
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "version": settings.APP_VERSION}
+    return {
+        "status": "ok",
+        "version": settings.APP_VERSION,
+        "author": settings.APP_AUTHOR,
+        "license": "MIT",
+    }
 
 
 @app.get("/api/migration-status")
@@ -115,6 +127,20 @@ def _find_web_data_dir():
 
 
 static_dir: Path = settings.STATIC_DIR
+
+@app.get("/api/images/proxy")
+async def proxy_image(url: str):
+    decoded = unquote(url)
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(decoded, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    raise HTTPException(status_code=502, detail=f"Upstream returned {resp.status}")
+                content = await resp.read()
+                content_type = resp.headers.get("Content-Type", "image/png")
+                return Response(content=content, media_type=content_type)
+    except aiohttp.ClientError as e:
+        raise HTTPException(status_code=502, detail=f"Proxy error: {e}")
 
 if static_dir.exists():
     app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")

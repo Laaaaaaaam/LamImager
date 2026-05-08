@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_provider import ApiProvider
-from app.models.billing import BillingRecord, BillingRecordType
+from app.services.billing_service import record_billing, calc_cost
 from app.schemas.prompt import PromptOptimizeRequest, PromptOptimizeResponse
 from app.utils.crypto import decrypt
 from app.utils.llm_client import LLMClient
@@ -18,6 +18,7 @@ async def stream_llm_chat(
     messages: list[dict],
     temperature: float = 0.7,
     session_id: str | None = None,
+    stream_type: str = "assistant",
 ):
     result = await db.execute(select(ApiProvider).where(ApiProvider.id == provider_id))
     provider = result.scalar_one_or_none()
@@ -25,7 +26,12 @@ async def stream_llm_chat(
         yield f"data: {json.dumps({'error': 'LLM provider not found'})}\n\n"
         return
 
-    api_key = decrypt(provider.api_key_enc)
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception as e:
+        yield f"data: {json.dumps({'error': f'API key decryption failed: {e}'})}\n\n"
+        return
+
     client = LLMClient(provider.base_url, api_key, provider.model_id)
 
     full_response = []
@@ -47,22 +53,19 @@ async def stream_llm_chat(
             tokens_out = LLMClient.estimate_tokens(full_text)
             tokens_in = sum(LLMClient.estimate_tokens(m["content"]) for m in messages)
 
-        cost = 0.0
-        if provider.billing_type.value == "per_token" and provider.unit_price:
-            cost = float(provider.unit_price) * (tokens_in + tokens_out) / 1000
+        cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=1)
 
-        billing = BillingRecord(
+        await record_billing(
+            db,
             session_id=session_id,
             provider_id=provider.id,
-            billing_type=BillingRecordType.per_token,
+            billing_type=provider.billing_type.value,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost=cost,
             currency=provider.currency,
-            detail={"type": "llm_stream"},
+            detail={"type": stream_type},
         )
-        db.add(billing)
-        await db.commit()
 
         yield f"data: {json.dumps({'done': True, 'cost': cost})}\n\n"
     except Exception as e:
@@ -158,17 +161,29 @@ async def optimize_prompt(
     if not provider:
         raise ValueError("LLM provider not found")
 
-    api_key = decrypt(provider.api_key_enc)
-    client = LLMClient(provider.base_url, api_key, provider.model_id)
-
     direction = data.direction
+
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception as e:
+        raise ValueError(f"LLM API key decryption failed: {e}") from e
+
+    client = LLMClient(provider.base_url, api_key, provider.model_id)
 
     system_prompt = build_optimization_prompt(direction, data.prompt)
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": data.prompt},
-    ]
+    if data.multimodal_context:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": data.multimodal_context + [
+                {"type": "text", "text": f"\n\n根据上述上下文和参考图片，优化以下生图提示词:\n{data.prompt}"}
+            ]},
+        ]
+    else:
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": data.prompt},
+        ]
 
     response = await client.chat(messages, temperature=0.7)
     optimized = LLMClient.extract_content(response)
@@ -176,21 +191,19 @@ async def optimize_prompt(
     tokens_in = response.get("usage", {}).get("prompt_tokens", 0)
     tokens_out = response.get("usage", {}).get("completion_tokens", 0)
 
-    cost = 0.0
-    if provider.billing_type.value == "per_token" and provider.unit_price:
-        cost = float(provider.unit_price) * (tokens_in + tokens_out) / 1000
+    cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=1)
 
-    billing = BillingRecord(
+    await record_billing(
+        db,
+        session_id=data.session_id,
         provider_id=provider.id,
-        billing_type=BillingRecordType.per_token,
+        billing_type=provider.billing_type.value,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         cost=cost,
         currency=provider.currency,
-        detail={"prompt": data.prompt[:100], "direction": direction, "type": "llm_chat"},
+        detail={"prompt": data.prompt[:100], "direction": direction, "type": "optimize"},
     )
-    db.add(billing)
-    await db.commit()
 
     return PromptOptimizeResponse(
         original=data.prompt,
@@ -208,7 +221,12 @@ async def optimize_prompt_stream(
         yield f"data: {json.dumps({'error': 'LLM provider not found'})}\n\n"
         return
 
-    api_key = decrypt(provider.api_key_enc)
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception as e:
+        yield f"data: {json.dumps({'error': f'API key decryption failed: {e}'})}\n\n"
+        return
+
     client = LLMClient(provider.base_url, api_key, provider.model_id)
 
     system_prompt = build_optimization_prompt(data.direction, data.prompt)
@@ -230,21 +248,19 @@ async def optimize_prompt_stream(
         tokens_out = LLMClient.estimate_tokens(full_text)
         tokens_in = sum(LLMClient.estimate_tokens(m["content"]) for m in messages)
 
-        cost = 0.0
-        if provider.billing_type.value == "per_token" and provider.unit_price:
-            cost = float(provider.unit_price) * (tokens_in + tokens_out) / 1000
+        cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=1)
 
-        billing = BillingRecord(
+        await record_billing(
+            db,
+            session_id=data.session_id,
             provider_id=provider.id,
-            billing_type=BillingRecordType.per_token,
+            billing_type=provider.billing_type.value,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             cost=cost,
             currency=provider.currency,
-            detail={"prompt": data.prompt[:100], "direction": data.direction, "type": "llm_stream"},
+            detail={"prompt": data.prompt[:100], "direction": data.direction, "type": "optimize"},
         )
-        db.add(billing)
-        await db.commit()
 
         yield f"data: {json.dumps({'done': True, 'cost': cost})}\n\n"
     except Exception as e:

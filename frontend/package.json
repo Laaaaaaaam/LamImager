@@ -2,6 +2,8 @@
   "name": "lamimager-frontend",
   "private": true,
   "version": "0.1.0",
+  "author": "霖二 @Laaaaaaaam <2667605815@qq.com>",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
