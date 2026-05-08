@@ -200,7 +200,7 @@ export interface PlanTemplate {
   id: string
   name: string
   description: string
-  strategy: 'parallel' | 'iterative' | 'style_anchor'
+  strategy: 'parallel' | 'iterative' | 'radiate'
   steps: PlanStep[]
   variables: TemplateVariable[]
   is_builtin: boolean

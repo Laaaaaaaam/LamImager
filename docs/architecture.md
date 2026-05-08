@@ -245,7 +245,7 @@ User Input (Agent mode)
 ### Style Anchor Flow
 For multi-item generation (e.g. "4 emoji pack"):
 1. LLM → `plan(action="list")` → sees「套图生成」template
-2. LLM → `plan(action="apply")` → triggers `_execute_style_anchor` in `generate_service.py`
+2. LLM → `plan(action="apply")` → triggers `_execute_radiate` in `generate_service.py`
 3. Code generates anchor grid → PIL crops into cells → per-cell image generation with reference
 
 ### SSE Events

@@ -108,7 +108,7 @@ _BUILTIN_TEMPLATES = [
     {
         "name": "套图生成",
         "description": "生成风格统一的多子项套图。先生成风格锚点网格图再逐项生成，防止风格跑偏。",
-        "strategy": "style_anchor",
+        "strategy": "radiate",
         "is_builtin": True,
         "variables": [
             {"key": "items", "type": "array", "label": "子项列表", "default": [], "required": True},

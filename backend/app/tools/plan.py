@@ -52,7 +52,7 @@ class PlanTool(Tool):
             },
             "strategy": {
                 "type": "string",
-                "enum": ["parallel", "iterative", "style_anchor"],
+                "enum": ["parallel", "iterative", "radiate"],
                 "description": "执行策略，action=create时选填，默认parallel",
             },
         },
@@ -125,7 +125,7 @@ class PlanTool(Tool):
                 "steps": steps,
                 "strategy": template.strategy,
             }
-            if template.strategy == "style_anchor":
+            if template.strategy == "radiate":
                 meta["items"] = variables.get("items", [])
                 meta["style"] = variables.get("style", "")
                 meta["overall_theme"] = variables.get("overall_theme", "")

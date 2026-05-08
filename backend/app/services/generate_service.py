@@ -448,7 +448,7 @@ async def _apply_vision_fallback(
     return prompt
 
 
-async def _execute_style_anchor(
+async def _execute_radiate(
     db: AsyncSession,
     session_id: str,
     plan_meta: dict,
@@ -497,7 +497,7 @@ async def _execute_style_anchor(
     client = ImageClient(provider.base_url, api_key, provider.model_id)
 
     cols, rows = _compute_grid_config(n_items)
-    steps.append({"type": "style_anchor", "items": n_items, "grid": f"{cols}x{rows}"})
+    steps.append({"type": "radiate", "items": n_items, "grid": f"{cols}x{rows}"})
 
     style_desc = plan_meta.get("style", plan_meta.get("template_name", ""))
     theme = plan_meta.get("overall_theme", "")
@@ -547,7 +547,7 @@ async def _execute_style_anchor(
                         message_type="image",
                         metadata={"image_urls": urls},
                     )
-                    steps.append({"type": "style_anchor_item", "index": i, "prompt": item_prompt})
+                    steps.append({"type": "radiate_item", "index": i, "prompt": item_prompt})
             except Exception as e:
                 logger.warning(f"Style anchor item #{i} failed: {e}")
 
@@ -555,7 +555,7 @@ async def _execute_style_anchor(
         return {
             "images": accumulated_images,
             "steps": steps,
-            "strategy": "style_anchor",
+            "strategy": "radiate",
             "cancelled": False,
         }
 
@@ -837,7 +837,7 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                 )
                 if result:
                     return result
-            if event.name == "plan" and event.meta and event.meta.get("strategy") == "style_anchor":
+            if event.name == "plan" and event.meta and event.meta.get("strategy") == "radiate":
                 items = event.meta.get("items", [])
                 if not items:
                     from app.models.message import Message
@@ -852,7 +852,7 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                     items = _extract_items_from_text(user_text)
                     event.meta["items"] = items
                 if items:
-                    result = await _execute_style_anchor(
+                    result = await _execute_radiate(
                         db, session_id, event.meta, data,
                         task_manager, accumulated_images, steps,
                         llm_provider_id, tokens_in, tokens_out, cost_total,
