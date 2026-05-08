@@ -320,3 +320,12 @@ WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
 2026-05-08 22:45:01,869 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('image_gen',)
 2026-05-08 22:45:45,124 INFO sqlalchemy.engine.Engine ROLLBACK
 INFO:     127.0.0.1:55615 - "POST /api/sessions/8d921fb6-94f7-48d5-b1fe-4ab886440acf/generate HTTP/1.1" 500 Internal Server Error
+INFO:     127.0.0.1:61066 - "GET /api/health HTTP/1.1" 200 OK
+2026-05-08 22:59:04,730 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:59:04,731 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at, coalesce(anon_1.message_count, ?) AS message_count, coalesce(anon_2.cost, ?) AS cost, coalesce(anon_2.tokens, ?) AS tokens 
+FROM sessions LEFT OUTER JOIN (SELECT messages.session_id AS session_id, count(messages.id) AS message_count 
+FROM messages GROUP BY messages.session_id) AS anon_1 ON anon_1.session_id = sessions.id LEFT OUTER JOIN (SELECT billing_records.session_id AS session_id, coalesce(sum(billing_records.cost), ?) AS cost, coalesce(sum(billing_records.tokens_in + billing_records.tokens_out), ?) AS tokens 
+FROM billing_records GROUP BY billing_records.session_id) AS anon_2 ON anon_2.session_id = sessions.id ORDER BY sessions.updated_at DESC
+2026-05-08 22:59:04,732 INFO sqlalchemy.engine.Engine [cached since 930.9s ago] (0, 0, 0, 0, 0)
+INFO:     127.0.0.1:56565 - "GET /api/sessions HTTP/1.1" 200 OK
+2026-05-08 22:59:04,733 INFO sqlalchemy.engine.Engine ROLLBACK

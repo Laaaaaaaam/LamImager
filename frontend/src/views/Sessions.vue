@@ -951,24 +951,20 @@ function copyToClipboard(text: string) {
 }
 
 function renderMarkdown(text: string): string {
+  const codeBlocks: string[] = []
+
   let html = text
-
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    return `<pre><code>${escaped.trim()}</code></pre>`
-  })
-
-  html = html.replace(/`([^`]+)`/g, (_, code) => {
-    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    return `<code>${escaped}</code>`
-  })
-
-  html = html
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/&amp;lt;\/?code&amp;gt;/g, (m) => m.replace(/&amp;/g, '&'))
-    .replace(/&amp;lt;\/?pre&amp;gt;/g, (m) => m.replace(/&amp;/g, '&'))
+    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      codeBlocks.push(`<pre><code>${escaped.trim()}</code></pre>`)
+      return `\x00CB${codeBlocks.length - 1}\x00`
+    })
+    .replace(/`([^`]+)`/g, (_, code) => {
+      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      codeBlocks.push(`<code>${escaped}</code>`)
+      return `\x00CB${codeBlocks.length - 1}\x00`
+    })
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -986,20 +982,18 @@ function renderMarkdown(text: string): string {
   html = html.replace(/^[-*]\s(.+)$/gm, '<li>$1</li>')
 
   html = html.replace(/(<li[^>]*>[\s\S]*?<\/li>\n?)+/g, (match) => {
-    const isOrdered = /value=/.test(match)
-    return `<${isOrdered ? 'ol' : 'ul'}>${match}</${isOrdered ? 'ol' : 'ul'}>`
+    return `<${/value=/.test(match) ? 'ol' : 'ul'}>${match}</${/value=/.test(match) ? 'ol' : 'ul'}>`
   })
 
   html = html.replace(/---+/g, '<hr>')
-
-  html = html.replace(/\n\s*\n/g, '</p><p>')
+  html = html.replace(/\n\s*\n/g, '\n')
   html = html.replace(/\n/g, '<br>')
 
-  html = html.replace(/<p><\/p>/g, '')
-  html = `<p>${html}</p>`
+  if (!/^<(?:h[1-3]|pre|ul|ol|blockquote|hr)/.test(html.trim())) {
+    html = `<p>${html}</p>`
+  }
 
-  html = html.replace(/<p>(<(?:h[1-3]|pre|ul|ol|blockquote|hr))/g, '$1')
-  html = html.replace(/(<\/(?:h[1-3]|pre|ul|ol|blockquote|hr)>)<\/p>/g, '$1')
+  html = html.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i)])
 
   return html
 }
