@@ -38,14 +38,6 @@ class GenerateImageTool(Tool):
                 "items": {"type": "string"},
                 "description": "参考图URL列表。从 image_search 工具返回的 sources[].image_url 中选取合适的URL传入。",
             },
-            "grid_config": {
-                "type": "object",
-                "properties": {
-                    "cols": {"type": "integer", "description": "网格列数"},
-                    "rows": {"type": "integer", "description": "网格行数"},
-                },
-                "description": "可选。非空时生成网格图并按比例切分，返回每格小图b64。用于风格锚定。",
-            },
         },
         "required": ["prompt"],
     }
