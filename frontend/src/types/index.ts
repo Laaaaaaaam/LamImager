@@ -4,7 +4,7 @@ export interface ApiProvider {
   base_url: string
   model_id: string
   api_key_masked: string
-  provider_type: 'image_gen' | 'llm'
+  provider_type: 'image_gen' | 'llm' | 'tool'
   billing_type: 'per_call' | 'per_token'
   unit_price: number
   currency: string
@@ -18,7 +18,7 @@ export interface ApiProviderCreate {
   base_url: string
   model_id: string
   api_key: string
-  provider_type: 'image_gen' | 'llm'
+  provider_type: 'image_gen' | 'llm' | 'tool'
   billing_type?: 'per_call' | 'per_token'
   unit_price?: number
   currency?: string
@@ -145,7 +145,7 @@ export interface Message {
   session_id: string
   role: 'user' | 'assistant' | 'system'
   content: string
-  message_type: 'text' | 'image' | 'plan' | 'optimization' | 'skill' | 'error'
+  message_type: 'text' | 'image' | 'plan' | 'optimization' | 'skill' | 'error' | 'agent'
   metadata: Record<string, unknown>
   created_at: string
 }
@@ -163,6 +163,9 @@ export interface GenerateRequest {
   reference_labels?: { index: number; source: string; name: string }[]
   context_messages?: { role: string; content: string; image_urls?: string[] }[]
   plan_strategy?: string
+  agent_mode?: boolean
+  agent_tools?: string[]
+  agent_plan_strategy?: string
 }
 
 export interface PlanStep {
@@ -212,4 +215,12 @@ export interface DefaultModelsConfig {
   default_image_width: number
   default_image_height: number
   max_concurrent: number
+}
+
+export interface AgentStepEvent {
+  type: 'tool_call' | 'tool_result'
+  name: string
+  args?: Record<string, unknown>
+  content?: string
+  meta?: Record<string, unknown>
 }

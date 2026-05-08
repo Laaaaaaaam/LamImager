@@ -56,3 +56,6 @@ class GenerateRequest(BaseModel):
     reference_labels: list[dict] = []
     context_messages: list[dict] = []
     plan_strategy: str = ""
+    agent_mode: bool = False
+    agent_tools: list[str] = []
+    agent_plan_strategy: str = ""

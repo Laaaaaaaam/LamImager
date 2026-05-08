@@ -39,6 +39,7 @@ class TaskManager:
         self._queues: dict[str, asyncio.Queue] = {}
         self._queue_counter = 0
         self._semaphore = asyncio.Semaphore(5)
+        self._cancel_events: dict[str, asyncio.Event] = {}
 
     async def acquire(self):
         await self._semaphore.acquire()
@@ -49,6 +50,7 @@ class TaskManager:
     def update_task(self, session_id: str, status: TaskStatus, progress: int = 0, total: int = 0, message: str = ""):
         if status == TaskStatus.IDLE:
             self._tasks.pop(session_id, None)
+            self._cancel_events.pop(session_id, None)
         else:
             self._tasks[session_id] = TaskInfo(
                 session_id=session_id,
@@ -91,6 +93,20 @@ class TaskManager:
 
     def unsubscribe(self, queue_id: str):
         self._queues.pop(queue_id, None)
+
+    def get_cancel_event(self, session_id: str) -> asyncio.Event:
+        if session_id not in self._cancel_events:
+            self._cancel_events[session_id] = asyncio.Event()
+        return self._cancel_events[session_id]
+
+    def cancel_task(self, session_id: str):
+        event = self._cancel_events.get(session_id)
+        if event:
+            event.set()
+
+    def cleanup_task(self, session_id: str):
+        self._tasks.pop(session_id, None)
+        self._cancel_events.pop(session_id, None)
 
     def _broadcast(self, event: dict):
         for queue in self._queues.values():

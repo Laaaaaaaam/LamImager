@@ -18,4 +18,6 @@ export const sessionApi = {
     api.post<Message>(`/sessions/${id}/messages`, data),
 
   generate: (data: GenerateRequest) => api.post(`/sessions/${data.session_id}/generate`, data),
+
+  cancel: (id: string) => api.post(`/sessions/${id}/cancel`),
 }

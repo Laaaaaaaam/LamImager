@@ -23,7 +23,7 @@ from app.services.session_manager import (
     message_to_response,
     update_session,
 )
-from app.services.generate_service import handle_generate
+from app.services.generate_service import handle_generate, handle_agent_generate
 from app.services.task_manager import TaskManager
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -102,5 +102,15 @@ async def api_add_message(session_id: str, data: MessageCreate, db: AsyncSession
 @router.post("/{session_id}/generate")
 async def api_generate(session_id: str, data: GenerateRequest, db: AsyncSession = Depends(get_db)):
     data.session_id = session_id
-    result = await handle_generate(db, data)
+    if data.agent_mode:
+        result = await handle_agent_generate(db, data)
+    else:
+        result = await handle_generate(db, data)
     return result
+
+
+@router.post("/{session_id}/cancel")
+async def api_cancel(session_id: str):
+    task_manager = TaskManager()
+    task_manager.cancel_task(session_id)
+    return {"message": "Cancelled"}

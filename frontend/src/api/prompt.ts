@@ -119,6 +119,64 @@ export const promptApi = {
     }
   },
 
+  streamChatWithTools: async function* (
+    messages: { role: string; content: string }[],
+    providerId: string,
+    tools: string[],
+    sessionId: string | null = null,
+    temperature: number = 0.7,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{ type: string; data: unknown }, void, unknown> {
+    const response = await fetch('/api/prompt/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages, provider_id: providerId, session_id: sessionId, temperature, stream_type: 'assistant', tools }),
+      signal,
+    })
+
+    if (!response.ok) {
+      const err = await response.json()
+      throw new Error(err.detail || 'Stream request failed')
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('No response body')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    try {
+      while (true) {
+        if (signal?.aborted) break
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event = JSON.parse(line.slice(6))
+              if (event.error) throw new Error(event.error)
+              if (event.token) yield { type: 'token', data: event.token }
+              if (event.tool_call) yield { type: 'tool_call', data: event.tool_call }
+              if (event.tool_result) yield { type: 'tool_result', data: event.tool_result }
+              if (event.done) yield { type: 'done', data: event }
+            } catch (e: any) {
+              if (e.message !== 'Unknown' && !e.message.startsWith('data:')) {
+                throw e
+              }
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  },
+
   planStream: async function* (
     messages: { role: string; content: string }[],
     providerId: string,

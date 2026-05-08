@@ -9,12 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_provider import ApiProvider, ProviderType
 from app.services.billing_service import record_billing, calc_cost
-from app.schemas.session import GenerateRequest
+from app.schemas.session import GenerateRequest, MessageCreate
 from app.schemas.prompt import PromptOptimizeRequest
 from app.services.session_manager import add_message, add_system_message, message_to_response
 from app.services.skill_engine import apply_skill, get_skill
 from app.services.rule_engine import apply_rules, get_active_rules
 from app.services.prompt_optimizer import optimize_prompt
+from app.services.agent_service import run_agent_loop, AGENT_SYSTEM_PROMPT, ErrorEvent
 from app.services.task_manager import TaskManager, TaskStatus
 from app.utils.crypto import decrypt
 from app.utils.image_client import ImageClient, ImageGenError, ImageGenNotSupportedError
@@ -30,7 +31,6 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
     task_manager = TaskManager()
     task_manager.update_task(session_id, TaskStatus.GENERATING, message="生成中")
 
-    from app.schemas.session import MessageCreate
     await add_message(db, session_id, MessageCreate(
         content=prompt,
         message_type="text",
@@ -463,3 +463,102 @@ def _build_multimodal_context(messages: list[dict]) -> list[dict]:
                 "image_url": {"url": img_url, "detail": "auto"},
             })
     return content_parts
+
+
+async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict:
+    session_id = data.session_id
+    prompt = data.prompt
+
+    task_manager = TaskManager()
+    task_manager.update_task(session_id, TaskStatus.GENERATING, message="Agent 执行中")
+
+    await add_message(db, session_id, MessageCreate(
+        content=prompt,
+        message_type="text",
+        metadata={"agent_mode": True, "agent_tools": data.agent_tools, "agent_plan_strategy": data.agent_plan_strategy},
+    ))
+
+    llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
+    if not llm_provider_id:
+        provider_result = await db.execute(
+            select(ApiProvider).where(
+                ApiProvider.provider_type == ProviderType.llm,
+                ApiProvider.is_active == True,
+            )
+        )
+        llm_provider = provider_result.scalars().first()
+        if llm_provider:
+            llm_provider_id = llm_provider.id
+
+    if not llm_provider_id:
+        task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置LLM")
+        await add_system_message(db, session_id, "未配置LLM，请先在API管理中添加", message_type="error")
+        return {"error": "No LLM provider configured"}
+
+    messages = [
+        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
+
+    steps = []
+    final_output = ""
+    tokens_in = 0
+    tokens_out = 0
+    cost_total = 0.0
+    cancelled = False
+
+    cancel_event = task_manager.get_cancel_event(session_id)
+
+    async for event in run_agent_loop(
+        db=db,
+        provider_id=llm_provider_id,
+        messages=messages,
+        tools=data.agent_tools,
+        session_id=session_id,
+        cancel_event=cancel_event,
+    ):
+        if event.type == "error":
+            task_manager.update_task(session_id, TaskStatus.ERROR, message=event.error)
+            await add_system_message(db, session_id, f"Agent 执行失败: {event.error}", message_type="error")
+            return {"error": event.error}
+        elif event.type == "cancelled":
+            cancelled = True
+            final_output = event.partial_output
+            tokens_in = event.tokens_in
+            tokens_out = event.tokens_out
+            break
+        elif event.type == "tool_call":
+            steps.append({"type": "tool_call", "name": event.name, "args": event.args})
+        elif event.type == "tool_result":
+            steps.append({"type": "tool_result", "name": event.name, "content": event.content[:500]})
+        elif event.type == "token":
+            final_output += event.content
+        elif event.type == "done":
+            tokens_in = event.tokens_in
+            tokens_out = event.tokens_out
+            cost_total = event.cost
+
+    cancel_label = " (已取消)" if cancelled else ""
+    await add_system_message(db, session_id,
+        (final_output.strip() or "Agent 执行完成") + cancel_label,
+        message_type="agent",
+        metadata={
+            "steps": steps,
+            "final_output": final_output,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "cost": cost_total,
+            "cancelled": cancelled,
+        },
+    )
+
+    task_manager.update_task(session_id, TaskStatus.IDLE)
+
+    return {
+        "output": final_output,
+        "steps": steps,
+        "cost": cost_total,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cancelled": cancelled,
+    }

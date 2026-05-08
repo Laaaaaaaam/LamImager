@@ -124,6 +124,21 @@
             <template v-else-if="msg.message_type === 'error'">
               <p class="error-text">{{ msg.content }}</p>
             </template>
+            <template v-else-if="msg.message_type === 'agent'">
+              <div class="agent-card">
+                <div class="agent-card-header">
+                  <span class="agent-badge">Agent</span>
+                  <span class="agent-cost" v-if="msg.metadata?.cost">费用 ¥{{ (msg.metadata.cost as number)?.toFixed(4) }}</span>
+                </div>
+                <div v-if="msg.metadata?.steps && (msg.metadata.steps as any[]).length" class="agent-steps">
+                  <div v-for="(step: any, si: number) in msg.metadata.steps" :key="si" class="agent-step">
+                    <span class="agent-step-icon">{{ step.type === 'tool_call' ? '>' : step.type === 'tool_result' ? '<' : 'i' }}</span>
+                    <span class="agent-step-name">{{ step.name }}</span>
+                  </div>
+                </div>
+                <div class="agent-card-content">{{ msg.content }}</div>
+              </div>
+            </template>
             <template v-else>
               <p>{{ msg.content }}</p>
             </template>
@@ -196,14 +211,15 @@
             @keydown.enter.exact.prevent="sendGenerate"
           ></textarea>
           <input
+            v-if="!agentMode"
             v-model="negativePrompt"
             type="text"
             class="negative-input"
             placeholder="反向提示词（可选）"
           />
         </div>
-        <div class="input-controls">
-          <div class="input-options">
+          <div class="input-controls">
+          <div v-if="!agentMode" class="input-options">
             <label class="upload-btn" title="上传图片">
               <input type="file" accept="image/*" multiple @change="handleFileUpload($event, 'image')" hidden />
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -241,12 +257,20 @@
             </label>
           </div>
           <div class="input-actions">
+            <button class="btn btn-sm" @click="agentMode = !agentMode" :class="{ 'btn-primary': agentMode }" :title="agentMode ? 'Agent 模式' : '正常模式'">
+              智能
+            </button>
             <button class="btn btn-sm" @click="showAssistant = !showAssistant" :class="{ 'btn-primary': showAssistant }">
               助手
             </button>
             <button class="btn btn-primary btn-sm" @click="sendGenerate" :disabled="!inputText.trim() || (currentSessionId && isSessionBusy(currentSessionId))">
-              {{ (currentSessionId && isSessionBusy(currentSessionId)) ? '任务进行中...' : (isRefineMode ? '精修发送' : '发送') }}
+              {{ (currentSessionId && isSessionBusy(currentSessionId)) ? '任务进行中...' : (isRefineMode ? '精修发送' : (agentMode ? 'Agent发送' : '发送')) }}
             </button>
+            <button
+              v-if="agentMode && currentSessionId && isSessionBusy(currentSessionId)"
+              class="btn btn-sm btn-danger"
+              @click="cancelAgent"
+            >取消</button>
           </div>
         </div>
       </div>
@@ -285,6 +309,35 @@
               @click="contextMode = 'current'"
             >仅当前输入</button>
           </div>
+          <div class="context-toggle" style="margin-top: 6px;">
+            <button
+              class="toggle-btn"
+              :class="{ active: memoryMode === 'global' }"
+              @click="memoryMode = 'global'"
+            >全局跨窗口</button>
+            <button
+              class="toggle-btn"
+              :class="{ active: memoryMode === 'session' }"
+              @click="memoryMode = 'session'"
+            >仅当前会话</button>
+          </div>
+          <div class="context-toggle" style="margin-top: 6px;">
+            <button
+              class="toggle-btn"
+              :class="{ active: responseStyle === 'default' }"
+              @click="responseStyle = 'default'"
+            >默认</button>
+            <button
+              class="toggle-btn"
+              :class="{ active: responseStyle === 'verbose' }"
+              @click="responseStyle = 'verbose'"
+            >详细</button>
+            <button
+              class="toggle-btn"
+              :class="{ active: responseStyle === 'concise' }"
+              @click="responseStyle = 'concise'"
+            >简洁</button>
+          </div>
           <div class="dialog-messages" ref="dialogContainer">
             <div v-for="m in dialogMessages" :key="m.id" class="dialog-msg" :class="m.role">
               <template v-if="m.attachments && m.attachments.length">
@@ -296,6 +349,18 @@
               <button class="dialog-msg-copy" @click="copyToClipboard(m.content)" title="复制">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               </button>
+            </div>
+          </div>
+          <div v-if="dialogToolCalls.length" class="tool-calls-area">
+            <div v-for="tc in dialogToolCalls" :key="tc.id" class="tool-call-card" :class="{ collapsed: tc.collapsed }">
+              <div class="tool-call-header" @click="tc.collapsed = !tc.collapsed">
+                <span class="tool-call-badge">{{ tc.name === 'web_search' ? '搜索' : tc.name === 'image_search' ? '图片搜索' : tc.name }}</span>
+                <span class="tool-call-status">{{ tc.content ? '完成' : '执行中...' }}</span>
+              </div>
+              <div v-if="!tc.collapsed" class="tool-call-body">
+                <div v-if="tc.content" class="tool-call-content">{{ tc.content }}</div>
+                <div v-else class="tool-call-loading">搜索中...</div>
+              </div>
             </div>
           </div>
           <div class="dialog-actions">
@@ -315,7 +380,18 @@
                 <input type="file" accept="image/*,.txt,.md" multiple @change="handleDialogFileUpload" hidden />
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
               </label>
-              <input v-model="dialogInput" placeholder="输入消息..." @keydown.enter.prevent="sendDialog" />
+              <button class="search-toggle-btn" :class="{ active: searchEnabled }" @click="searchEnabled = !searchEnabled" title="网络搜索">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              </button>
+              <textarea
+                ref="dialogTextarea"
+                v-model="dialogInput"
+                placeholder="输入消息..."
+                class="dialog-textarea"
+                rows="1"
+                @input="autoResizeDialogTextarea"
+                @keydown.enter.exact.prevent="sendDialog"
+              />
               <button class="btn btn-sm btn-primary" @click="sendDialog" :disabled="!dialogInput.trim() && !dialogAttachments.length">发送</button>
             </div>
           </div>
@@ -490,6 +566,7 @@ const currentSessionId = computed(() => store.currentSessionId)
 const messages = computed(() => store.messages)
 
 const inputText = ref('')
+const agentMode = ref(false)
 const negativePrompt = ref('')
 const imageCount = ref(1)
 const imageWidth = ref(1024)
@@ -574,7 +651,13 @@ const assistantTabs = [
 ]
 
 const contextMode = ref<'shared' | 'current'>('shared')
+const memoryMode = ref<'global' | 'session'>('global')
 const dialogMessages = ref<{ id: number; role: string; content: string; attachments?: Attachment[] }[]>([])
+
+const savedMemoryMode = localStorage.getItem('assistantMemoryMode')
+if (savedMemoryMode === 'global' || savedMemoryMode === 'session') {
+  memoryMode.value = savedMemoryMode
+}
 
 const savedDialog = localStorage.getItem('assistantDialogHistory')
 if (savedDialog) {
@@ -583,7 +666,11 @@ if (savedDialog) {
   } catch { /* ignore */ }
 }
 const dialogInput = ref('')
+const searchEnabled = ref(false)
+const dialogToolCalls = ref<{ id: string; name: string; args?: Record<string,unknown>; content?: string; collapsed: boolean }[]>([])
+const dialogTextarea = ref<HTMLTextAreaElement | null>(null)
 const dialogContainer = ref<HTMLElement | null>(null)
+const responseStyle = ref<'default' | 'verbose' | 'concise'>('default')
 
 const optimizeDirections = [
   { key: 'detail_enhancement', label: '细节增强', desc: '提升画面细节与清晰度' },
@@ -755,13 +842,24 @@ watch(messages, () => {
 })
 
 watch(dialogMessages, (val) => {
-  localStorage.setItem('assistantDialogHistory', JSON.stringify(val))
+  if (memoryMode.value === 'global') {
+    localStorage.setItem('assistantDialogHistory', JSON.stringify(val))
+  }
   nextTick(() => {
     if (dialogContainer.value) {
       dialogContainer.value.scrollTop = dialogContainer.value.scrollHeight
     }
   })
 }, { deep: true })
+
+watch(memoryMode, (val) => {
+  localStorage.setItem('assistantMemoryMode', val)
+  if (val === 'session') {
+    localStorage.removeItem('assistantDialogHistory')
+  } else {
+    localStorage.setItem('assistantDialogHistory', JSON.stringify(dialogMessages.value))
+  }
+})
 
 
 function formatTokens(tokens: number) {
@@ -842,6 +940,14 @@ function autoResizeTextarea() {
   textarea.style.height = newHeight + 'px'
 }
 
+function autoResizeDialogTextarea() {
+  const textarea = dialogTextarea.value
+  if (!textarea) return
+  textarea.style.height = 'auto'
+  const newHeight = Math.min(textarea.scrollHeight, 120)
+  textarea.style.height = newHeight + 'px'
+}
+
 function copyToClipboard(text: string) {
   navigator.clipboard.writeText(text).catch(() => {
     const textarea = document.createElement('textarea')
@@ -870,7 +976,8 @@ function saveDialogHistory() {
 
 async function clearDialog() {
   if (await dialog.showConfirm('确定要清除当前对话吗？建议先保存对话记录。')) {
-    dialogMessages.value = []
+    dialogMessages.value.length = 0
+    dialogToolCalls.value.length = 0
     localStorage.removeItem('assistantDialogHistory')
   }
 }
@@ -904,7 +1011,21 @@ async function selectSession(id: string) {
   selectedDirections.value = []
   customInstruction.value = ''
   optimizeResult.value = ''
+  if (memoryMode.value === 'session') {
+    dialogMessages.value.length = 0
+  }
   refreshAutoContext()
+}
+
+async function cancelAgent() {
+  const sid = currentSessionId.value
+  if (!sid) return
+  try {
+    await sessionApi.cancel(sid)
+    generatingText.value = '已取消'
+  } catch (e: any) {
+    console.error('Cancel failed:', e)
+  }
 }
 
 async function sendGenerate() {
@@ -981,7 +1102,7 @@ async function sendGenerate() {
     }))
 
   try {
-    await store.generate(sid, {
+    const generateData: any = {
       prompt: promptWithContext,
       negative_prompt: negativePrompt.value,
       image_count: imageCount.value,
@@ -992,7 +1113,15 @@ async function sendGenerate() {
       reference_labels: refLabels.length ? refLabels : undefined,
       context_messages: contextMessages,
       plan_strategy: '',
-    })
+    }
+
+    if (agentMode.value) {
+      generateData.agent_mode = true
+      generateData.agent_tools = ['web_search', 'image_search']
+      generateData.agent_plan_strategy = selectedPlanStrategy.value || 'parallel'
+    }
+
+    await store.generate(sid, generateData)
     inputText.value = ''
     negativePrompt.value = ''
     selectedImages.value = []
@@ -1109,8 +1238,6 @@ async function sendDialog() {
   if (!dialogInput.value.trim() && !dialogAttachments.value.length) return
   const userMsg = dialogInput.value
   const currentAttachments = [...dialogAttachments.value]
-  const userMsgId = ++dialogMsgId
-  dialogMessages.value.push({ id: userMsgId, role: 'user', content: userMsg, attachments: currentAttachments })
   dialogInput.value = ''
   dialogAttachments.value = []
 
@@ -1141,24 +1268,59 @@ async function sendDialog() {
       ? messages.value.slice(-10).map(m => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`).join('\n') + '\n'
       : ''
 
-    const systemPrompt = contextMode.value === 'shared'
+    const userMsgId = ++dialogMsgId
+    dialogMessages.value.push({ id: userMsgId, role: 'user', content: userMsg, attachments: currentAttachments })
+
+    const responseHint = responseStyle.value === 'verbose'
+      ? '请给出详细、全面的回答，展开解释每个要点。'
+      : responseStyle.value === 'concise'
+        ? '请给出极其简洁的回答，不要展开解释，直接给出核心信息。'
+        : ''
+
+    const systemPrompt = (contextMode.value === 'shared'
       ? '你是一个AI生图助手。你可以参考上下文中的对话来回答问题。请用中文回复。不要重复或总结上下文对话内容，直接回答用户当前问题。'
-      : '你是一个AI生图助手。请根据用户输入回答问题。请用中文回复。'
+      : '你是一个AI生图助手。请根据用户输入回答问题。请用中文回复。') + responseHint
+
+    const llmMessages: { role: string; content: string }[] = [
+      { role: 'system', content: systemPrompt },
+    ]
+    const history = dialogMessages.value.slice(0, -1).slice(-20)
+    for (const m of history) {
+      llmMessages.push({ role: m.role, content: m.content })
+    }
+    llmMessages.push({ role: 'user', content: context + messageContent })
 
     const assistantMsgId = ++dialogMsgId
     dialogMessages.value.push({ id: assistantMsgId, role: 'assistant', content: '' })
 
     let fullContent = ''
     streamAbortController = new AbortController()
-    const stream = promptApi.streamChat([
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: context + messageContent },
-    ], providerId, currentSessionId.value, 0.7, streamAbortController.signal)
+    if (searchEnabled.value) {
+      dialogToolCalls.value = []
+      const stream = promptApi.streamChatWithTools(llmMessages, providerId, ['web_search', 'image_search'], currentSessionId.value, 0.7, streamAbortController.signal)
 
-    for await (const token of stream) {
-      fullContent += token
-      const msg = dialogMessages.value.find(m => m.id === assistantMsgId)
-      if (msg) msg.content = fullContent
+      for await (const event of stream) {
+        if (event.type === 'token') {
+          fullContent += event.data as string
+          const msg = dialogMessages.value.find(m => m.id === assistantMsgId)
+          if (msg) msg.content = fullContent
+        } else if (event.type === 'tool_call') {
+          const tc = event.data as { name: string; args?: Record<string,unknown> }
+          dialogToolCalls.value.push({ id: crypto.randomUUID(), name: tc.name, args: tc.args, content: '', collapsed: false })
+        } else if (event.type === 'tool_result') {
+          const tr = event.data as { name: string; content: string; meta?: Record<string,unknown> }
+          const tool = dialogToolCalls.value.find(t => t.name === tr.name && !t.content)
+          if (tool) tool.content = tr.content
+        }
+      }
+    } else {
+      const stream = promptApi.streamChat(llmMessages, providerId, currentSessionId.value, 0.7, streamAbortController.signal)
+
+      for await (const token of stream) {
+        fullContent += token
+        const msg = dialogMessages.value.find(m => m.id === assistantMsgId)
+        if (msg) msg.content = fullContent
+      }
     }
 
     streamAbortController = null
@@ -2025,6 +2187,60 @@ watch(selectedSkillIds, (ids) => {
   color: var(--danger);
 }
 
+.agent-card {
+  border-left: 3px solid var(--accent);
+  background: var(--bg, #fafafa);
+  padding: 12px;
+  margin: 4px 0;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.agent-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.agent-badge {
+  background: var(--accent);
+  color: #fff;
+  padding: 1px 8px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.agent-cost {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.agent-steps {
+  margin-bottom: 8px;
+}
+
+.agent-step {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.agent-step-icon {
+  font-size: 10px;
+  width: 16px;
+  text-align: center;
+}
+
+.agent-card-content {
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .attachment-preview {
   display: flex;
   flex-wrap: wrap;
@@ -2690,16 +2906,21 @@ watch(selectedSkillIds, (ids) => {
   align-items: center;
 }
 
-.dialog-input-row input {
+.dialog-input-row input,
+.dialog-textarea {
   flex: 1;
   padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 12px;
   outline: none;
+  font-family: inherit;
+  resize: none;
+  line-height: 1.4;
 }
 
-.dialog-input-row input:focus {
+.dialog-input-row input:focus,
+.dialog-textarea:focus {
   border-color: var(--accent);
 }
 
@@ -2720,6 +2941,85 @@ watch(selectedSkillIds, (ids) => {
   background: var(--hover);
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.search-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all 0.15s;
+}
+
+.search-toggle-btn:hover {
+  background: var(--hover);
+  color: var(--accent);
+}
+
+.search-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.tool-calls-area {
+  padding: 4px 8px;
+}
+
+.tool-call-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 4px 0;
+  overflow: hidden;
+  background: var(--bg, #fafafa);
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tool-call-badge {
+  background: #e8e8e8;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.tool-call-status {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.tool-call-body {
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+  max-height: 150px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.tool-call-loading {
+  color: var(--accent);
+  animation: pulse-text 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-text {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .section-title {

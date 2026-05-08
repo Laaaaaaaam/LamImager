@@ -11,6 +11,7 @@ from app.models.base import gen_uuid, now
 class ProviderType(str, enum.Enum):
     image_gen = "image_gen"
     llm = "llm"
+    tool = "tool"
 
 
 class BillingType(str, enum.Enum):

@@ -184,6 +184,8 @@ async def get_breakdown(db: AsyncSession) -> dict:
         "task_planning": "规划生成",
         "vision": "视觉分析",
         "image_description": "视觉分析",
+        "agent": "AI Agent",
+        "tool": "工具调用",
     }
     by_type = []
     for row in type_result:

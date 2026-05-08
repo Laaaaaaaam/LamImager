@@ -21,6 +21,7 @@ class MessageType(str, enum.Enum):
     optimization = "optimization"
     skill = "skill"
     error = "error"
+    agent = "agent"
 
 
 class Message(Base):
