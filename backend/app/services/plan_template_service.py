@@ -91,19 +91,18 @@ async def apply_template(db: AsyncSession, template_id: str, data: PlanTemplateA
 
 _BUILTIN_TEMPLATES = [
     {
-        "name": "角色设计",
-        "description": "生成角色概念设计、精修和变体图",
+        "name": "通用设计",
+        "description": "从概念到精修的通用迭代设计流程。适用于角色、物品、场景等主题。",
         "strategy": "iterative",
         "is_builtin": True,
         "variables": [
-            {"key": "character", "type": "string", "label": "角色描述", "default": "", "required": True},
-            {"key": "art_style", "type": "string", "label": "美术风格", "default": "anime style"},
-            {"key": "pose", "type": "string", "label": "姿势", "default": "standing"},
+            {"key": "subject", "type": "string", "label": "设计主题", "default": "", "required": True},
+            {"key": "style", "type": "string", "label": "美术风格", "default": "digital art"},
         ],
         "steps": [
-            {"prompt": "Character design concept of {{character}}, {{art_style}}, {{pose}}, full body, character sheet", "negative_prompt": "blurry, low quality, deformed", "description": "概念设计", "image_count": 2, "image_size": ""},
-            {"prompt": "Refined character design of {{character}}, {{art_style}}, detailed, high quality", "negative_prompt": "blurry, low quality, deformed, inconsistent", "description": "精修设计", "image_count": 1, "image_size": ""},
-            {"prompt": "Character variation of {{character}}, {{art_style}}, different angle, {{pose}}", "negative_prompt": "blurry, low quality, deformed", "description": "角度变体", "image_count": 2, "image_size": ""},
+            {"prompt": "Design concept of {{subject}}, {{style}}, draft, composition exploration", "negative_prompt": "blurry, low quality, deformed", "description": "概念设计", "image_count": 2, "image_size": ""},
+            {"prompt": "Refined design of {{subject}}, {{style}}, detailed, high quality, polished", "negative_prompt": "blurry, low quality, deformed, inconsistent", "description": "精修设计", "image_count": 1, "image_size": ""},
+            {"prompt": "Final variation of {{subject}}, {{style}}, different presentation, showcase quality", "negative_prompt": "blurry, low quality, deformed", "description": "最终展示", "image_count": 2, "image_size": ""},
         ],
     },
     {
