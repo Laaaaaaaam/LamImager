@@ -20,8 +20,8 @@
         <tr v-for="p in providers" :key="p.id">
           <td>{{ p.nickname }}</td>
           <td>
-            <span class="badge" :class="p.provider_type === 'llm' ? 'badge-active' : 'badge-running'">
-              {{ p.provider_type === 'llm' ? 'LLM' : '图像生成' }}
+            <span class="badge" :class="p.provider_type === 'llm' ? 'badge-active' : p.provider_type === 'tool' ? 'badge-tool' : 'badge-running'">
+              {{ p.provider_type === 'llm' ? 'LLM' : p.provider_type === 'tool' ? '工具' : '图像生成' }}
             </span>
           </td>
           <td>{{ p.model_id }}</td>
@@ -73,6 +73,7 @@
           <select v-model="form.provider_type">
             <option value="llm">LLM</option>
             <option value="image_gen">图像生成</option>
+            <option value="tool">工具</option>
           </select>
         </div>
         <div class="form-group">
@@ -126,7 +127,7 @@ const form = reactive({
   base_url: '',
   model_id: '',
   api_key: '',
-  provider_type: 'llm' as 'llm' | 'image_gen',
+  provider_type: 'llm' as 'llm' | 'image_gen' | 'tool',
   billing_type: 'per_call' as 'per_call' | 'per_token',
   unit_price: 0,
   currency: 'CNY',
