@@ -56,11 +56,11 @@
           <label>名称</label>
           <input v-model="form.nickname" type="text" placeholder="API提供商名称" />
         </div>
-        <div class="form-group">
+        <div class="form-group" v-if="form.provider_type !== 'web_search'">
           <label>接口地址</label>
           <input v-model="form.base_url" type="url" placeholder="https://api.openai.com" />
         </div>
-        <div class="form-group">
+        <div class="form-group" v-if="form.provider_type !== 'web_search'">
           <label>模型ID</label>
           <input v-model="form.model_id" type="text" placeholder="gpt-4o" />
         </div>
@@ -165,12 +165,18 @@ function openDrawer(provider?: ApiProvider) {
 
 async function saveProvider() {
   try {
+    const data = { ...form }
+    if (data.provider_type === 'web_search') {
+      data.base_url = data.base_url || 'https://google.serper.dev'
+      data.model_id = data.model_id || 'serper'
+      data.billing_type = 'per_call'
+    }
     if (editingProvider.value) {
-      const updateData: Record<string, unknown> = { ...form }
+      const updateData: Record<string, unknown> = { ...data }
       if (!form.api_key) delete updateData.api_key
       await store.updateProvider(editingProvider.value.id, updateData)
     } else {
-      await store.createProvider({ ...form })
+      await store.createProvider(data)
     }
     providers.value = store.providers
     drawerOpen.value = false
