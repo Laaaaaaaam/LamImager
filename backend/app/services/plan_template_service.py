@@ -107,7 +107,7 @@ _BUILTIN_TEMPLATES = [
     },
     {
         "name": "套图生成",
-        "description": "生成风格统一的多子项套图。先生成风格锚点网格图再逐项生成，防止风格跑偏。",
+        "description": "生成风格统一的多子项套图。先生成4096x4096风格锚点网格图再逐项生成，防止跑偏。",
         "strategy": "radiate",
         "is_builtin": True,
         "variables": [
@@ -116,7 +116,7 @@ _BUILTIN_TEMPLATES = [
             {"key": "overall_theme", "type": "string", "label": "主题描述", "default": ""},
         ],
         "steps": [
-            {"role": "anchor", "description": "风格锚点网格图", "prompt": "A grid layout showing all items in a unified {style} style. {overall_theme}. Each cell clearly separated, consistent style throughout.", "image_count": 1, "image_size": ""},
+            {"role": "anchor", "description": "风格锚点网格图(4096x4096)", "prompt": "A grid layout showing all items in a unified {style} style. {overall_theme}. Each cell clearly separated, consistent style throughout.", "image_count": 1, "image_size": "4096x4096"},
             {"role": "expand", "description": "逐项生图", "prompt": "{item.prompt}. {style} style., consistent with reference grid.", "image_count": 1, "image_size": "", "repeat": "items", "reference_step_indices": [0]},
         ],
     },

@@ -502,12 +502,17 @@ async def _execute_radiate(
     style_desc = plan_meta.get("style", plan_meta.get("template_name", ""))
     theme = plan_meta.get("overall_theme", "")
 
-    task_manager.update_task(session_id, TaskStatus.GENERATING, message=f"生成风格锚点图 ({cols}x{rows})")
+    task_manager.update_task(session_id, TaskStatus.GENERATING, message=f"生成风格锚点图 ({cols}x{rows}, 4096x4096)")
     anchor_prompt = f"A {cols}x{rows} grid layout of {n_items} items in {style_desc} style. {theme}. Each cell clearly separated, consistent unified style throughout the entire grid."
 
     try:
-        response = await client.generate(prompt=anchor_prompt, n=1, size="1024x1024")
-        anchor_urls = ImageClient.extract_images(response)
+        anchor_sizes = ["4096x4096", "2048x2048", "1024x1024"]
+        anchor_urls = []
+        for sz in anchor_sizes:
+            response = await client.generate(prompt=anchor_prompt, n=1, size=sz)
+            anchor_urls = ImageClient.extract_images(response)
+            if anchor_urls:
+                break
         if not anchor_urls:
             return {"error": "Failed to generate anchor grid"}
 

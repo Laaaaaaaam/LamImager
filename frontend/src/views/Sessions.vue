@@ -675,8 +675,8 @@ const customInstruction = ref('')
 const optimizeResult = ref('')
 
 const planStrategies = [
-  { key: 'parallel', label: '并发生成', desc: '所有步骤同时执行，互不依赖' },
-  { key: 'iterative', label: '顺序迭代', desc: '按步执行，后端精修参考前一步结果' },
+  { key: 'parallel', label: '并发生成', desc: '批量初稿/变体，快有不确定性' },
+  { key: 'iterative', label: '顺序迭代', desc: '逐步精修，上一步作参考' },
 ]
 const selectedPlanStrategy = ref('parallel')
 

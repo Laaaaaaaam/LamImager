@@ -57,8 +57,8 @@
         <div class="form-group">
           <label>执行策略</label>
           <select v-model="form.strategy">
-            <option value="parallel">并发生成</option>
-            <option value="iterative">顺序迭代</option>
+            <option value="parallel">并发生成（批量探索）</option>
+            <option value="iterative">顺序迭代（逐步精修）</option>
           </select>
         </div>
         <div class="form-group">
@@ -89,8 +89,8 @@
         <div class="form-group">
           <label>执行策略</label>
           <select v-model="aiStrategy">
-            <option value="parallel">并发生成</option>
-            <option value="iterative">顺序迭代</option>
+            <option value="parallel">并发生成（批量探索）</option>
+            <option value="iterative">顺序迭代（逐步精修）</option>
           </select>
         </div>
         <button class="btn btn-primary" style="width: 100%" @click="generateWithAi" :disabled="!aiDescription.trim() || aiGenerating">
