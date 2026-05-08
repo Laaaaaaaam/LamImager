@@ -952,16 +952,23 @@ function copyToClipboard(text: string) {
 
 function renderMarkdown(text: string): string {
   let html = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
 
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     return `<pre><code>${escaped.trim()}</code></pre>`
   })
 
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
+  html = html.replace(/`([^`]+)`/g, (_, code) => {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return `<code>${escaped}</code>`
+  })
+
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/&amp;lt;\/?code&amp;gt;/g, (m) => m.replace(/&amp;/g, '&'))
+    .replace(/&amp;lt;\/?pre&amp;gt;/g, (m) => m.replace(/&amp;/g, '&'))
 
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
@@ -2016,6 +2023,70 @@ watch(selectedSkillIds, (ids) => {
 .message.system p {
   font-size: 13px;
   line-height: 1.6;
+}
+
+.message-content code,
+.message.system .message-content code,
+.dialog-msg-content code {
+  background: var(--hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.message-content pre,
+.dialog-msg-content pre {
+  background: var(--hover);
+  padding: 8px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 6px 0;
+  font-size: 11px;
+}
+
+.message-content pre code,
+.dialog-msg-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.message-content ul,
+.message-content ol,
+.dialog-msg-content ul,
+.dialog-msg-content ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.message-content blockquote,
+.dialog-msg-content blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  margin: 6px 0;
+  color: var(--text-secondary);
+}
+
+.message-content h1,
+.message-content h2,
+.message-content h3,
+.dialog-msg-content h1,
+.dialog-msg-content h2,
+.dialog-msg-content h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 8px 0 4px 0;
+}
+
+.message-content a,
+.dialog-msg-content a {
+  color: var(--accent);
+}
+
+.message-content hr,
+.dialog-msg-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
 }
 
 .image-grid {
