@@ -107,7 +107,7 @@ class PlanTool(Tool):
         content_lines = ["可用模板列表：", ""]
         for item in items:
             builtin_tag = " [内置]" if item["is_builtin"] else ""
-            content_lines.append(f"- {item['name']}{builtin_tag}: {item['description']} (策略={item['strategy']}, 步骤数={item['steps_count']})")
+            content_lines.append(f"- {item['name']}{builtin_tag} (id={item['id']}, 策略={item['strategy']}, 步骤={item['steps_count']})")
         return ToolResult(content="\n".join(content_lines), meta={"templates": items})
 
     async def _apply_template(self, db: AsyncSession, template_id: str, variables: dict) -> ToolResult:
@@ -116,14 +116,20 @@ class PlanTool(Tool):
             return ToolResult(content=f"未找到模板 {template_id}，请先用 action=list 查看可用模板", meta={"error": "template_not_found"})
         try:
             request = PlanTemplateApplyRequest(template_id=template_id, variables=variables)
-            steps = await apply_template(db, request)
+            steps = await apply_template(db, template_id, request)
             content_lines = [f"应用模板「{template.name}」，共 {len(steps)} 个步骤："]
             for i, s in enumerate(steps, 1):
                 content_lines.append(f"{i}. {s.get('description', s.get('prompt', '')[:80])}")
-            return ToolResult(
-                content="\n".join(content_lines),
-                meta={"template_name": template.name, "steps": steps, "strategy": template.strategy},
-            )
+            meta = {
+                "template_name": template.name,
+                "steps": steps,
+                "strategy": template.strategy,
+            }
+            if template.strategy == "style_anchor":
+                meta["items"] = variables.get("items", [])
+                meta["style"] = variables.get("style", "")
+                meta["overall_theme"] = variables.get("overall_theme", "")
+            return ToolResult(content="\n".join(content_lines), meta=meta)
         except Exception as e:
             return ToolResult(content=f"应用模板失败: {e}", meta={"error": str(e)})
 

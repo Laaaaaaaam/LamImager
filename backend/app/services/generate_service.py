@@ -587,6 +587,23 @@ async def _build_agent_context(db: AsyncSession, session_id: str) -> list[dict]:
     return context
 
 
+def _extract_items_from_text(text: str) -> list[dict]:
+    import re
+    items = []
+    emojis = {
+        "开心": "happy expression", "难过": "sad expression", "生气": "angry expression",
+        "惊讶": "surprised expression", "哭泣": "crying expression", "笑": "laughing smile expression",
+        "爱": "love heart expression", "酷": "cool expression", "委屈": "upset expression",
+        "晕": "dizzy expression", "害羞": "shy expression", "睡觉": "sleeping expression",
+        "胜利": "victory expression", "加油": "cheer expression", "疑问": "question expression",
+        "无语": "speechless expression",
+    }
+    for kw, prompt in emojis.items():
+        if kw in text:
+            items.append({"prompt": prompt})
+    return items
+
+
 def _compute_grid_config(n: int) -> tuple[int, int]:
     if n <= 2:
         return 1, n
@@ -821,13 +838,27 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                 if result:
                     return result
             if event.name == "plan" and event.meta and event.meta.get("strategy") == "style_anchor":
-                result = await _execute_style_anchor(
-                    db, session_id, event.meta, data,
-                    task_manager, accumulated_images, steps,
-                    llm_provider_id, tokens_in, tokens_out, cost_total,
-                )
-                if result:
-                    return result
+                items = event.meta.get("items", [])
+                if not items:
+                    from app.models.message import Message
+                    msg_result = await db.execute(
+                        select(Message).where(
+                            Message.session_id == session_id,
+                            Message.role == "user",
+                        ).order_by(Message.created_at.desc()).limit(1)
+                    )
+                    user_msg = msg_result.scalars().first()
+                    user_text = user_msg.content if user_msg else prompt
+                    items = _extract_items_from_text(user_text)
+                    event.meta["items"] = items
+                if items:
+                    result = await _execute_style_anchor(
+                        db, session_id, event.meta, data,
+                        task_manager, accumulated_images, steps,
+                        llm_provider_id, tokens_in, tokens_out, cost_total,
+                    )
+                    if result:
+                        return result
         elif event.type == "token":
             final_output += event.content
         elif event.type == "done":
@@ -859,4 +890,5 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
         "cancelled": cancelled,
+        "images": accumulated_images,
     }
