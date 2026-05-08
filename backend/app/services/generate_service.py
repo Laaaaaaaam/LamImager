@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import logging
 from datetime import datetime
 
+import aiohttp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -444,6 +447,163 @@ async def _apply_vision_fallback(
     return prompt
 
 
+async def _execute_style_anchor(
+    db: AsyncSession,
+    session_id: str,
+    plan_meta: dict,
+    data: GenerateRequest,
+    task_manager: TaskManager,
+    accumulated_images: list[str],
+    steps: list[dict],
+    llm_provider_id: str,
+    tokens_in: int,
+    tokens_out: int,
+    cost_total: float,
+) -> dict | None:
+    items = plan_meta.get("items", data.agent_tools)
+    if isinstance(items, dict):
+        items = []
+    n_items = len(items) if items else 0
+    if n_items == 0:
+        return None
+
+    image_provider_id = await _get_default_provider(db, "default_image_provider_id")
+    if not image_provider_id:
+        result = await db.execute(
+            select(ApiProvider).where(
+                ApiProvider.provider_type == ProviderType.image_gen,
+                ApiProvider.is_active == True,
+            )
+        )
+        provider = result.scalars().first()
+        if provider:
+            image_provider_id = provider.id
+
+    if not image_provider_id:
+        task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
+        return {"error": "No image provider"}
+
+    provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
+    provider = provider_result.scalar_one_or_none()
+    if not provider:
+        return {"error": "Image provider not found"}
+
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception as e:
+        return {"error": f"Image key decrypt failed: {e}"}
+
+    client = ImageClient(provider.base_url, api_key, provider.model_id)
+
+    cols, rows = _compute_grid_config(n_items)
+    steps.append({"type": "style_anchor", "items": n_items, "grid": f"{cols}x{rows}"})
+
+    style_desc = plan_meta.get("style", plan_meta.get("template_name", ""))
+    theme = plan_meta.get("overall_theme", "")
+
+    task_manager.update_task(session_id, TaskStatus.GENERATING, message=f"生成风格锚点图 ({cols}x{rows})")
+    anchor_prompt = f"A {cols}x{rows} grid layout of {n_items} items in {style_desc} style. {theme}. Each cell clearly separated, consistent unified style throughout the entire grid."
+
+    try:
+        response = await client.generate(prompt=anchor_prompt, n=1, size="1024x1024")
+        anchor_urls = ImageClient.extract_images(response)
+        if not anchor_urls:
+            return {"error": "Failed to generate anchor grid"}
+
+        anchor_url = anchor_urls[0]
+        accumulated_images.append(anchor_url)
+        await add_system_message(db, session_id,
+            f"Agent 生成了风格锚点网格图 ({cols}x{rows})",
+            message_type="image",
+            metadata={"image_urls": [anchor_url]},
+        )
+
+        grid_images = await _crop_grid(anchor_url, cols, rows)
+        if not grid_images or len(grid_images) < n_items:
+            return {"error": f"Grid crop failed: got {len(grid_images)} cells, need {n_items}"}
+
+        for i in range(n_items):
+            item = items[i] if i < len(items) else {}
+            item_prompt = item.get("prompt", f"item {i+1}")
+            task_manager.update_task(session_id, TaskStatus.GENERATING,
+                progress=i + 1, total=n_items,
+                message=f"生成子项 {i + 1}/{n_items}: {item_prompt[:30]}")
+
+            try:
+                response = await client.generate(
+                    prompt=f"{item_prompt}. {style_desc} style.",
+                    n=1,
+                    size="1024x1024",
+                    reference_images=[grid_images[i]],
+                )
+                urls = ImageClient.extract_images(response)
+                if urls:
+                    accumulated_images.extend(urls)
+                    await add_system_message(db, session_id,
+                        f"Agent 生成子项 {i+1}: {item_prompt[:40]}",
+                        message_type="image",
+                        metadata={"image_urls": urls},
+                    )
+                    steps.append({"type": "style_anchor_item", "index": i, "prompt": item_prompt})
+            except Exception as e:
+                logger.warning(f"Style anchor item #{i} failed: {e}")
+
+        task_manager.update_task(session_id, TaskStatus.IDLE)
+        return {
+            "images": accumulated_images,
+            "steps": steps,
+            "strategy": "style_anchor",
+            "cancelled": False,
+        }
+
+    except Exception as e:
+        task_manager.update_task(session_id, TaskStatus.ERROR, message=str(e))
+        await add_system_message(db, session_id, f"套图生成失败: {e}", message_type="error")
+        return {"error": str(e)}
+
+
+def _compute_grid_config(n: int) -> tuple[int, int]:
+    if n <= 2:
+        return 1, n
+    elif n <= 4:
+        return 2, (n + 1) // 2
+    elif n <= 9:
+        return 3, (n + 2) // 3
+    else:
+        return 4, (n + 3) // 4
+
+
+async def _crop_grid(image_url: str, cols: int, rows: int) -> list[str]:
+    try:
+        from PIL import Image as PILImage
+        import base64, io
+        if image_url.startswith("data:"):
+            b64_data = image_url.split(",", 1)[1]
+        else:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(image_url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    data = await resp.read()
+                    b64_data = base64.b64encode(data).decode("utf-8")
+        img_data = base64.b64decode(b64_data)
+        img = PILImage.open(io.BytesIO(img_data))
+        w, h = img.size
+        cell_w = w // cols
+        cell_h = h // rows
+        grid_images = []
+        for row in range(rows):
+            for col in range(cols):
+                left = col * cell_w
+                top = row * cell_h
+                cell = img.crop((left, top, left + cell_w, top + cell_h))
+                buf = io.BytesIO()
+                cell.save(buf, format="PNG")
+                cell_b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+                grid_images.append(f"data:image/png;base64,{cell_b64}")
+        return grid_images
+    except Exception:
+        return []
+
+
 def _build_multimodal_context(messages: list[dict]) -> list[dict]:
     content_parts: list[dict] = []
     content_parts.append({
@@ -538,8 +698,16 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                 await add_system_message(db, session_id,
                     f"Agent 生成了 {len(urls)} 张图片",
                     message_type="image",
-                    metadata={"image_urls": urls, "prompt": str(event.args or {})},
+                    metadata={"image_urls": urls},
                 )
+            if event.name == "plan" and event.meta and event.meta.get("strategy") == "style_anchor":
+                result = await _execute_style_anchor(
+                    db, session_id, event.meta, data,
+                    task_manager, accumulated_images, steps,
+                    llm_provider_id, tokens_in, tokens_out, cost_total,
+                )
+                if result:
+                    return result
         elif event.type == "token":
             final_output += event.content
         elif event.type == "done":

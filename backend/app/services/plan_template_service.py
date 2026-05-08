@@ -140,6 +140,21 @@ _BUILTIN_TEMPLATES = [
         ],
     },
     {
+        "name": "套图生成",
+        "description": "生成风格统一的多子项套图。先生成风格锚点网格图再逐项生成，防止风格跑偏。",
+        "strategy": "style_anchor",
+        "is_builtin": True,
+        "variables": [
+            {"key": "items", "type": "array", "label": "子项列表", "default": [], "required": True},
+            {"key": "style", "type": "string", "label": "整体风格", "default": "", "required": True},
+            {"key": "overall_theme", "type": "string", "label": "主题描述", "default": ""},
+        ],
+        "steps": [
+            {"role": "anchor", "description": "风格锚点网格图", "prompt": "A grid layout showing all items in a unified {style} style. {overall_theme}. Each cell clearly separated, consistent style throughout.", "image_count": 1, "image_size": ""},
+            {"role": "expand", "description": "逐项生图", "prompt": "{item.prompt}. {style} style., consistent with reference grid.", "image_count": 1, "image_size": "", "repeat": "items", "reference_step_indices": [0]},
+        ],
+    },
+    {
         "name": "迭代精修",
         "description": "从基础构图逐步精修到色彩和光影",
         "strategy": "iterative",
