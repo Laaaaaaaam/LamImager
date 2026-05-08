@@ -52,7 +52,7 @@ class PlanTool(Tool):
             },
             "strategy": {
                 "type": "string",
-                "enum": ["parallel", "sequential", "iterative"],
+                "enum": ["parallel", "iterative", "style_anchor"],
                 "description": "执行策略，action=create时选填，默认parallel",
             },
         },
@@ -172,7 +172,7 @@ class PlanTool(Tool):
             content=(
                 "现在请根据用户需求，用以下格式生成一个生图计划：\n\n"
                 "计划名称：<简短描述>\n"
-                "执行策略：parallel（并发生成）或 sequential（顺序执行）或 iterative（迭代优化）\n\n"
+                "执行策略：parallel（并发生成）或 iterative（顺序迭代优化）\n\n"
                 "步骤1：\n  - 提示词：<英文生图提示词>\n  - 说明：<这一步要生成什么>\n"
                 "步骤2：\n  - 提示词：<英文生图提示词>\n  - 说明：<这一步要生成什么>\n\n"
                 "输出计划后，按步骤调用 generate_image 工具逐一生成。如果搜索结果提供了有价值的参考，"

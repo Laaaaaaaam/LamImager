@@ -58,8 +58,7 @@
           <label>执行策略</label>
           <select v-model="form.strategy">
             <option value="parallel">并发生成</option>
-            <option value="sequential">顺序执行</option>
-            <option value="iterative">迭代优化</option>
+            <option value="iterative">顺序迭代</option>
           </select>
         </div>
         <div class="form-group">
@@ -91,8 +90,7 @@
           <label>执行策略</label>
           <select v-model="aiStrategy">
             <option value="parallel">并发生成</option>
-            <option value="sequential">顺序执行</option>
-            <option value="iterative">迭代优化</option>
+            <option value="iterative">顺序迭代</option>
           </select>
         </div>
         <button class="btn btn-primary" style="width: 100%" @click="generateWithAi" :disabled="!aiDescription.trim() || aiGenerating">
@@ -137,8 +135,7 @@ const aiStreamText = ref('')
 
 const strategyLabelMap: Record<string, string> = {
   parallel: '并发生成',
-  sequential: '顺序执行',
-  iterative: '迭代优化',
+  iterative: '顺序迭代',
 }
 
 function strategyLabel(key: string) {

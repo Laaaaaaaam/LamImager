@@ -676,8 +676,7 @@ const optimizeResult = ref('')
 
 const planStrategies = [
   { key: 'parallel', label: '并发生成', desc: '所有步骤同时执行，互不依赖' },
-  { key: 'sequential', label: '顺序执行', desc: '按步骤逐一执行，每步依赖前一步结果' },
-  { key: 'iterative', label: '迭代优化', desc: '每步基于前一步结果优化，逐步精炼' },
+  { key: 'iterative', label: '顺序迭代', desc: '按步执行，后端精修参考前一步结果' },
 ]
 const selectedPlanStrategy = ref('parallel')
 
@@ -1488,7 +1487,7 @@ async function doPlan() {
 3. negative_prompt列出需要避免的常见问题
 4. description用中文简要说明该步骤的目标
 5. 将复杂需求分解为聚焦的子任务
-6. ${selectedPlanStrategy.value === 'parallel' ? '各步骤应独立，可并发生成' : selectedPlanStrategy.value === 'iterative' ? '后续步骤应基于前一步结果进行优化' : '步骤按顺序执行'}
+6. ${selectedPlanStrategy.value === 'parallel' ? '各步骤应独立，可并发生成' : '后续步骤应基于前一步结果进行迭代优化'}
 7. 只输出JSON数组，不要其他文字`
 
     let fullContent = ''
