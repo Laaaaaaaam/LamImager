@@ -156,6 +156,8 @@ tar -czf uploads-backup.tar.gz data/uploads/
 |------|--------|------|
 | `DEBUG` | `true` | 启用调试模式 |
 | `DEFAULT_IMAGE_SIZE` | `1024x1024` | 默认图片尺寸 |
+| `LAMIMAGER_DATA_DIR` | `<project>/data` | 覆盖运行时数据目录 (DB, 上传文件, 日志) |
+| `LAMIMAGER_STATIC_DIR` | `<project>/frontend/dist` | 覆盖静态文件目录 |
 
 ### 配置文件
 

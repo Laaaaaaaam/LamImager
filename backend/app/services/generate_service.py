@@ -506,6 +506,7 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
     tokens_out = 0
     cost_total = 0.0
     cancelled = False
+    accumulated_images: list[str] = []
 
     cancel_event = task_manager.get_cancel_event(session_id)
 
@@ -531,6 +532,14 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
             steps.append({"type": "tool_call", "name": event.name, "args": event.args})
         elif event.type == "tool_result":
             steps.append({"type": "tool_result", "name": event.name, "content": event.content[:500]})
+            if event.name == "generate_image" and event.meta and event.meta.get("image_urls"):
+                urls = event.meta.get("image_urls", [])
+                accumulated_images.extend(urls)
+                await add_system_message(db, session_id,
+                    f"Agent 生成了 {len(urls)} 张图片",
+                    message_type="image",
+                    metadata={"image_urls": urls, "prompt": str(event.args or {})},
+                )
         elif event.type == "token":
             final_output += event.content
         elif event.type == "done":
@@ -545,6 +554,7 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         metadata={
             "steps": steps,
             "final_output": final_output,
+            "images": accumulated_images,
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "cost": cost_total,

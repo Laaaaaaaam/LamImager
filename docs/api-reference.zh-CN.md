@@ -137,6 +137,18 @@ POST /api/sessions/{id}/messages
 
 响应: `Message`
 
+### 实时任务事件 (SSE)
+```
+GET /api/sessions/events
+```
+
+Content-Type: `text/event-stream`
+
+SSE 事件:
+- `data: {"type": "snapshot", "data": {"session_id": {"status": "generating", ...}}}` - 初始状态快照
+- `data: {"type": "task_update", "data": {"session_id": "uuid", "status": "generating", "progress": 2, "total": 4, "message": "..."}}` - 任务状态变化
+- `data: {"type": "ping", "data": {}}` - 30秒心跳
+
 ### 在会话中生成图片
 ```
 POST /api/sessions/{id}/generate
@@ -153,11 +165,20 @@ POST /api/sessions/{id}/generate
   "optimize_directions": ["detail_enhancement"],
   "custom_optimize_instruction": "",
   "reference_images": ["data:image/png;base64,..."],
-  "context_messages": [{"role": "user", "content": "..."}]
+  "reference_labels": [{"index": 1, "source": "upload", "name": "photoA.png"}],
+  "context_messages": [{"role": "user", "content": "...", "image_urls": ["http://localhost:8000/api/images/xxx.png"]}],
+  "plan_strategy": "parallel"
 }
 ```
 
 响应: `Message` (包含生成图片的助手消息)
+
+> **图生图**: 当 `reference_images` 非空时，后端使用三级降级:
+> 1. `POST /v1/chat/completions` 多模态消息 + 编号标签 (图1, 图2...)
+> 2. `POST /v1/images/edits` (原生 OpenAI，部分代理可能不支持)
+> 3. Vision LLM 视觉描述 → `POST /v1/images/generations` (纯文字兜底)
+>
+> **多模态上下文**: `context_messages` 可包含 `image_urls` 用于 LLM 视觉上下文。存在时后端通过 `_build_multimodal_context()` 构建多模态消息。
 
 ---
 
@@ -171,13 +192,12 @@ GET /api/settings/default-models
 响应:
 ```json
 {
-  "default_image_provider_id": "uuid",
-  "default_llm_provider_id": "uuid",
   "default_optimize_provider_id": "uuid",
+  "default_image_provider_id": "uuid",
   "default_plan_provider_id": "uuid",
-  "default_skill_id": "uuid",
   "default_image_width": 1024,
-  "default_image_height": 1024
+  "default_image_height": 1024,
+  "max_concurrent": 5
 }
 ```
 
@@ -189,8 +209,12 @@ PUT /api/settings/default-models
 请求体:
 ```json
 {
+  "default_optimize_provider_id": "uuid",
   "default_image_provider_id": "uuid",
-  "default_llm_provider_id": "uuid"
+  "default_plan_provider_id": "uuid",
+  "default_image_width": 1024,
+  "default_image_height": 1024,
+  "max_concurrent": 5
 }
 ```
 
@@ -403,6 +427,29 @@ GET /api/billing/export
 
 响应: `text/csv` 附件
 
+### 费用明细
+```
+GET /api/billing/breakdown
+```
+
+响应:
+```json
+{
+  "by_provider": [
+    {"provider_id": "uuid", "nickname": "GPT-Image-2", "cost": 5.70, "tokens": 18011}
+  ],
+  "by_type": [
+    {"type": "image_gen", "label": "图像生成", "cost": 5.70, "tokens": 18011, "count": 53},
+    {"type": "optimize", "label": "提示词优化", "cost": 0.01, "tokens": 5000, "count": 5},
+    {"type": "assistant", "label": "小助手对话", "cost": 0.02, "tokens": 8000, "count": 10},
+    {"type": "plan", "label": "规划生成", "cost": 0.01, "tokens": 3000, "count": 2},
+    {"type": "vision", "label": "视觉分析", "cost": 0.005, "tokens": 2000, "count": 1}
+  ]
+}
+```
+
+操作类型: `image_gen` | `optimize` | `assistant` | `plan` | `vision`
+
 ---
 
 ## 参考图
@@ -461,11 +508,17 @@ POST /api/prompt/optimize
 {
   "prompt": "一只猫坐在椅子上",
   "direction": "detail_enhancement",
-  "llm_provider_id": "uuid"
+  "llm_provider_id": "uuid",
+  "session_id": "uuid",
+  "multimodal_context": null
 }
 ```
 
-方向: `detail_enhancement` | `style_unification` | `composition_optimization`
+方向: `detail_enhancement` | `style_unification` | `composition_optimization` | `color_adjustment` | `lighting_enhancement` | `custom:<instruction>`
+
+多方向可用逗号组合: `detail_enhancement,style_unification`
+
+可选字段 `session_id` 将账单关联到会话。
 
 响应:
 ```json
@@ -475,6 +528,15 @@ POST /api/prompt/optimize
   "direction": "detail_enhancement"
 }
 ```
+
+### 流式优化提示词
+```
+POST /api/prompt/optimize/stream
+```
+
+Content-Type: `text/event-stream` (SSE)
+
+请求体: 与优化提示词相同。SSE 事件格式与流式 LLM 对话相同 (逐 token)。
 
 ### 流式 LLM 对话
 ```
@@ -488,14 +550,81 @@ Content-Type: `text/event-stream` (SSE)
 {
   "messages": [{"role": "user", "content": "你好"}],
   "provider_id": "uuid",
-  "temperature": 0.7
+  "session_id": "uuid",
+  "temperature": 0.7,
+  "stream_type": "assistant",
+  "agent_tools": ["web_search", "image_search"]
 }
 ```
+
+`stream_type`: `"assistant"` (默认) 用于通用聊天及计费分类。
+
+`agent_tools` (可选): LLM 可调用的工具列表。支持 `web_search`、`image_search`。启用后响应流中会包含 `tool_call` / `tool_result` 事件。
 
 SSE 事件:
 - `data: {"token": "词"}` - 每个生成的 token
 - `data: {"done": true, "cost": 0.001}` - 完成事件，包含账单
 - `data: {"error": "信息"}` - 错误事件
+
+### 流式规划生成
+```
+POST /api/prompt/plan
+```
+
+Content-Type: `text/event-stream` (SSE)
+
+请求体: 与流式 LLM 对话相同。账单以 `type: "plan"` 记录。
+
+### 图片代理
+```
+GET /api/images/proxy?url=<encoded_url>
+```
+
+服务端图片代理，避免 CORS 问题。前端在迭代精修时获取前一步输出图片时使用。
+
+---
+
+## 规划模板
+
+### 列出模板
+```
+GET /api/plan-templates
+```
+
+响应: `PlanTemplate[]`
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "产品展示",
+    "description": "专业产品摄影模板",
+    "strategy": "parallel",
+    "steps": [{"prompt": "...", "description": "..."}],
+    "variables": [{"key": "product", "type": "string", "label": "产品名", "default": ""}],
+    "is_builtin": true,
+    "created_at": "2026-05-07T12:00:00",
+    "updated_at": "2026-05-07T12:00:00"
+  }
+]
+```
+
+### 创建/获取/更新/删除模板
+```
+POST /api/plan-templates
+GET /api/plan-templates/{id}
+PUT /api/plan-templates/{id}
+DELETE /api/plan-templates/{id}
+```
+
+### 应用模板 (变量替换)
+```
+POST /api/plan-templates/{id}/apply
+```
+
+请求体: `{"variables": {"subject": "猫", "background": "花园"}}`
+
+响应: `{"steps": [{"prompt": "猫肖像, 专业灯光, 花园背景", ...}]}`
 
 ---
 

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.schemas.prompt import PromptOptimizeRequest, PromptOptimizeResponse
 from app.services.prompt_optimizer import optimize_prompt, optimize_prompt_stream, stream_llm_chat
-from app.services.agent_service import run_agent_loop
+from app.services.agent_service import run_agent_loop, WarningEvent
 
 router = APIRouter(prefix="/api/prompt", tags=["prompt"])
 
@@ -54,6 +54,8 @@ async def _stream_with_tools(db, data: StreamRequest):
             yield f"data: {json.dumps({'tool_call': {'name': event.name, 'args': event.args}})}\n\n"
         elif event.type == "tool_result":
             yield f"data: {json.dumps({'tool_result': {'name': event.name, 'content': event.content, 'meta': event.meta}})}\n\n"
+        elif event.type == "tool_warning":
+            yield f"data: {json.dumps({'tool_warning': {'name': event.name, 'reason': event.reason, 'retry_count': event.retry_count}})}\n\n"
         elif event.type == "done":
             yield f"data: {json.dumps({'done': True, 'cost': event.cost})}\n\n"
 

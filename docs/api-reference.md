@@ -182,6 +182,14 @@ Response: `Message` (assistant message with generated images)
 > **Multimodal Context**: `context_messages` can include `image_urls` for LLM visual context.
 > When present, backend builds multimodal messages via `_build_multimodal_context()`.
 
+### Proxy Image
+```
+GET /api/images/proxy?url=<encoded_url>
+```
+Fetches an external image server-side and returns the bytes. Used by the frontend to fetch cross-origin generated images for iterative refinement, avoiding browser CORS restrictions.
+
+Response: raw image bytes with appropriate `Content-Type` header.
+
 ---
 
 ## Settings
@@ -564,27 +572,26 @@ Body:
   "provider_id": "uuid",
   "session_id": "uuid",
   "temperature": 0.7,
-  "stream_type": "assistant"
+  "stream_type": "assistant",
+  "agent_tools": ["web_search", "image_search"]
 }
 ```
 
 `stream_type`: `"assistant"` (default) for general chat, used for billing categorization.
+
+`agent_tools` (optional): List of tool names the LLM can invoke. Supported values: `web_search`, `image_search`. When provided, the backend enables function calling and the response stream includes `tool_call` and `tool_result` events in addition to regular tokens.
 
 SSE Events:
 - `data: {"token": "word"}` - Each generated token
 - `data: {"done": true, "cost": 0.001}` - Completion event with billing
 - `data: {"error": "message"}` - Error event
 
-### Stream Plan Generation
+### Image Proxy
 ```
-POST /api/prompt/plan
+GET /api/images/proxy?url=<encoded_url>
 ```
 
-Content-Type: `text/event-stream` (SSE)
-
-Body: Same as Stream LLM Chat. Billing recorded with `type: "plan"`.
-
-SSE Events: Same format as Stream LLM Chat (token-by-token).
+Server-side image proxy to avoid CORS issues. Used by the frontend when fetching previous generation outputs for iterative refinement.
 
 ---
 

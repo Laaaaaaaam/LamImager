@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import aiohttp
-
 from app.tools.base import Tool, ToolResult
+from app.tools.web_search import _search_with_retry
 
 
 class ImageSearchTool(Tool):
@@ -11,6 +10,57 @@ class ImageSearchTool(Tool):
         "搜索互联网上的图片，获取设计参考图、风格情绪板、材质参考等。"
         "返回图片的标题、URL、缩略图和来源信息，可用于后续图像生成的视觉参考。"
     )
+    parameters = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "搜索关键词，用中文或英文描述想要搜索的图片类型",
+            },
+            "max_results": {
+                "type": "integer",
+                "description": "返回图片数量，默认5，最多10",
+                "default": 5,
+            },
+        },
+        "required": ["query"],
+    }
+
+    async def execute(self, query: str = "", max_results: int = 5, **kwargs) -> ToolResult:
+        api_key = kwargs.get("api_key", "")
+        retry_count = int(kwargs.get("retry_count", 3))
+        if not api_key:
+            return ToolResult(
+                content="图片搜索失败：未配置联网搜索API密钥，请在API管理中添加 provider_type=web_search 的提供商",
+                meta={"error": "missing_api_key"},
+            )
+
+        content, sources, attempts, best = await _search_with_retry(
+            api_key, query, max_results, retry_count, "images"
+        )
+
+        if not sources:
+            return ToolResult(
+                content=f"图片搜索未找到相关结果（尝试{attempts}次）", meta={"sources": [], "query": query, "attempts": attempts}
+            )
+
+        lines = []
+        src_list = []
+        for i, item in enumerate(sources[:max_results], 1):
+            title = item.get("title", "无标题")
+            image_url = item.get("imageUrl", "")
+            source_url = item.get("link", "")
+            lines.append(f"{i}. {title}\n   图片: {image_url}\n   来源: {source_url}")
+            src_list.append({
+                "title": title,
+                "image_url": image_url,
+                "source_url": source_url,
+            })
+
+        return ToolResult(
+            content="\n\n".join(lines),
+            meta={"sources": src_list, "query": query, "attempts": attempts, "best_attempt": best, "image_count": len(src_list)},
+        )
     parameters = {
         "type": "object",
         "properties": {

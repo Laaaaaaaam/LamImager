@@ -1,0 +1,322 @@
+2026-05-08 22:40:02,005 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:40:02,018 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("api_providers")
+2026-05-08 22:40:02,033 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,047 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("skills")
+2026-05-08 22:40:02,062 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,076 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("rules")
+2026-05-08 22:40:02,090 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,106 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("billing_records")
+2026-05-08 22:40:02,119 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,135 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("reference_images")
+2026-05-08 22:40:02,136 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,136 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("sessions")
+2026-05-08 22:40:02,137 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,138 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("messages")
+2026-05-08 22:40:02,138 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,139 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("app_settings")
+2026-05-08 22:40:02,139 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,140 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("plan_templates")
+2026-05-08 22:40:02,140 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-05-08 22:40:02,141 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:40:02,142 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:40:02,142 INFO sqlalchemy.engine.Engine PRAGMA table_info('billing_records')
+2026-05-08 22:40:02,143 INFO sqlalchemy.engine.Engine [generated in 0.00036s] ()
+2026-05-08 22:40:02,143 INFO sqlalchemy.engine.Engine SELECT name FROM sqlite_master WHERE type='table' AND name='tasks'
+2026-05-08 22:40:02,144 INFO sqlalchemy.engine.Engine [generated in 0.00036s] ()
+2026-05-08 22:40:02,144 INFO sqlalchemy.engine.Engine DROP TABLE IF EXISTS sub_tasks
+2026-05-08 22:40:02,145 INFO sqlalchemy.engine.Engine [generated in 0.00035s] ()
+2026-05-08 22:40:02,145 INFO sqlalchemy.engine.Engine DROP TABLE IF EXISTS tasks
+2026-05-08 22:40:02,146 INFO sqlalchemy.engine.Engine [generated in 0.00036s] ()
+2026-05-08 22:40:02,146 INFO sqlalchemy.engine.Engine PRAGMA table_info('sessions')
+2026-05-08 22:40:02,146 INFO sqlalchemy.engine.Engine [generated in 0.00034s] ()
+2026-05-08 22:40:02,147 INFO sqlalchemy.engine.Engine UPDATE sessions SET status = 'idle' WHERE status != 'idle'
+2026-05-08 22:40:02,147 INFO sqlalchemy.engine.Engine [generated in 0.00035s] ()
+2026-05-08 22:40:02,148 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:40:02,149 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:40:02,149 INFO sqlalchemy.engine.Engine SELECT id FROM plan_templates WHERE name = ? AND is_builtin = 1
+2026-05-08 22:40:02,149 INFO sqlalchemy.engine.Engine [generated in 0.00035s] ('产品展示套图',)
+2026-05-08 22:40:02,150 INFO sqlalchemy.engine.Engine SELECT id FROM plan_templates WHERE name = ? AND is_builtin = 1
+2026-05-08 22:40:02,150 INFO sqlalchemy.engine.Engine [cached since 0.001424s ago] ('角色设计',)
+2026-05-08 22:40:02,151 INFO sqlalchemy.engine.Engine SELECT id FROM plan_templates WHERE name = ? AND is_builtin = 1
+2026-05-08 22:40:02,152 INFO sqlalchemy.engine.Engine [cached since 0.002447s ago] ('四季风景',)
+2026-05-08 22:40:02,152 INFO sqlalchemy.engine.Engine SELECT id FROM plan_templates WHERE name = ? AND is_builtin = 1
+2026-05-08 22:40:02,153 INFO sqlalchemy.engine.Engine [cached since 0.003385s ago] ('迭代精修',)
+2026-05-08 22:40:02,153 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:60942 - "GET /api/health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64487 - "GET /api/health HTTP/1.1" 200 OK
+2026-05-08 22:43:33,751 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:33,753 INFO sqlalchemy.engine.Engine INSERT INTO sessions (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+2026-05-08 22:43:33,753 INFO sqlalchemy.engine.Engine [generated in 0.00067s] ('dca7d058-da24-4231-9bfd-cc9ef34b0d3e', 'agent test', 'idle', '2026-05-08 14:43:33.753178', '2026-05-08 14:43:33.753178')
+2026-05-08 22:43:33,754 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:43:33,803 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:33,805 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:43:33,805 INFO sqlalchemy.engine.Engine [generated in 0.00042s] ('dca7d058-da24-4231-9bfd-cc9ef34b0d3e',)
+2026-05-08 22:43:33,807 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:43:33,807 INFO sqlalchemy.engine.Engine [generated in 0.00046s] ('8728d2cb-1fd3-4377-8515-e8829cda79c5', 'dca7d058-da24-4231-9bfd-cc9ef34b0d3e', 'system', '欢迎使用 LamImager，输入指令开始图像生成，或打开右侧助手侧栏使用优化、规划等功能。', 'text', '{}', '2026-05-08 14:43:33.807420')
+2026-05-08 22:43:33,808 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:43:33,847 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:33,850 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at, coalesce(anon_1.message_count, ?) AS message_count, coalesce(anon_2.cost, ?) AS cost, coalesce(anon_2.tokens, ?) AS tokens 
+FROM sessions LEFT OUTER JOIN (SELECT messages.session_id AS session_id, count(messages.id) AS message_count 
+FROM messages GROUP BY messages.session_id) AS anon_1 ON anon_1.session_id = sessions.id LEFT OUTER JOIN (SELECT billing_records.session_id AS session_id, coalesce(sum(billing_records.cost), ?) AS cost, coalesce(sum(billing_records.tokens_in + billing_records.tokens_out), ?) AS tokens 
+FROM billing_records GROUP BY billing_records.session_id) AS anon_2 ON anon_2.session_id = sessions.id ORDER BY sessions.updated_at DESC
+2026-05-08 22:43:33,850 INFO sqlalchemy.engine.Engine [generated in 0.00044s] (0, 0, 0, 0, 0)
+INFO:     127.0.0.1:60166 - "POST /api/sessions HTTP/1.1" 200 OK
+2026-05-08 22:43:33,853 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:43:33,913 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:33,914 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:43:33,914 INFO sqlalchemy.engine.Engine [generated in 0.00044s] ('4febd6e3-af9f-448f-b388-5a5d1b9096c1', 'dca7d058-da24-4231-9bfd-cc9ef34b0d3e', 'user', '???????????', 'text', '{"agent_mode": true, "agent_tools": ["generate_image", "plan", "web_search"], "agent_plan_strategy": ""}', '2026-05-08 14:43:33.914658')
+2026-05-08 22:43:33,916 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:43:33,916 INFO sqlalchemy.engine.Engine [generated in 0.00041s] ('dca7d058-da24-4231-9bfd-cc9ef34b0d3e',)
+2026-05-08 22:43:33,918 INFO sqlalchemy.engine.Engine UPDATE sessions SET updated_at=? WHERE sessions.id = ?
+2026-05-08 22:43:33,918 INFO sqlalchemy.engine.Engine [generated in 0.00038s] ('2026-05-08 14:43:33.917694', 'dca7d058-da24-4231-9bfd-cc9ef34b0d3e')
+2026-05-08 22:43:33,918 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:43:33,962 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:33,962 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:43:33,963 INFO sqlalchemy.engine.Engine [generated in 0.00040s] ('4febd6e3-af9f-448f-b388-5a5d1b9096c1',)
+2026-05-08 22:43:33,964 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:43:33,965 INFO sqlalchemy.engine.Engine [generated in 0.00063s] ('default_optimize_provider_id',)
+2026-05-08 22:43:33,967 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.id = ?
+2026-05-08 22:43:33,967 INFO sqlalchemy.engine.Engine [generated in 0.00040s] ('b2af5e18-3975-40b7-8fa7-3b644c767e3d',)
+2026-05-08 22:43:33,970 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:43:33,970 INFO sqlalchemy.engine.Engine [generated in 0.00042s] ('web_search',)
+2026-05-08 22:43:33,971 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:43:33,971 INFO sqlalchemy.engine.Engine [cached since 0.0067s ago] ('search_retry_count',)
+2026-05-08 22:43:33,972 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:43:33,972 INFO sqlalchemy.engine.Engine [cached since 0.002818s ago] ('image_gen',)
+2026-05-08 22:43:39,386 INFO sqlalchemy.engine.Engine INSERT INTO billing_records (id, session_id, provider_id, billing_type, tokens_in, tokens_out, cost, currency, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:43:39,387 INFO sqlalchemy.engine.Engine [generated in 0.00060s] ('7efa445e-ea4f-475e-9121-1ab26249c0ce', 'dca7d058-da24-4231-9bfd-cc9ef34b0d3e', 'b2af5e18-3975-40b7-8fa7-3b644c767e3d', 'per_token', 671, 158, 3.316e-06, 'CNY', '{"type": "assistant", "rounds": 1, "tools_used": ["generate_image", "plan", "web_search"]}', '2026-05-08 14:43:39.386039')
+2026-05-08 22:43:39,388 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:43:39,431 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:39,432 INFO sqlalchemy.engine.Engine SELECT billing_records.id, billing_records.session_id, billing_records.provider_id, billing_records.billing_type, billing_records.tokens_in, billing_records.tokens_out, billing_records.cost, billing_records.currency, billing_records.detail, billing_records.created_at 
+FROM billing_records 
+WHERE billing_records.id = ?
+2026-05-08 22:43:39,432 INFO sqlalchemy.engine.Engine [generated in 0.00048s] ('7efa445e-ea4f-475e-9121-1ab26249c0ce',)
+2026-05-08 22:43:39,433 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:43:39,434 INFO sqlalchemy.engine.Engine [cached since 5.52s ago] ('33f53153-3625-4f52-b40f-28d1ce20acdd', 'dca7d058-da24-4231-9bfd-cc9ef34b0d3e', 'assistant', '你好！我可以帮你：\n\n- 搜设计/图片参考\n- 分析视觉风格\n- 写生图提示词\n- 直接生成图片\n\n你刚刚发的是“???????????”，可能是：\n1. 想测试我是否在线\n2. 输入乱码了\n3. 想让我猜你要做什么\n\n你可以直接这样发我：\n- “帮我找赛博朋克海报参考”\n- “做一个奶茶品牌logo方向”\n- “生成一张极简风卧室效果图”\n- “帮我写 Midjourney / SD 提示词”\n\n如果你愿意，也可以直接说一句：\n**“我想做____，风格是____，用途是____。”**', 'agent', '{"steps": [], "final_output": "\\u4f60\\u597d\\uff01\\u6211\\u53ef\\u4ee5\\u5e2e\\u4f60\\uff1a\\n\\n- \\u641c\\u8bbe\\u8ba1/\\u56fe\\u7247\\u53c2\\u8 ... (1034 characters truncated) ... u662f____\\uff0c\\u7528\\u9014\\u662f____\\u3002\\u201d**", "images": [], "tokens_in": 671, "tokens_out": 158, "cost": 3.316e-06, "cancelled": false}', '2026-05-08 14:43:39.433731')
+2026-05-08 22:43:39,435 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:43:39,474 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:43:39,475 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:43:39,475 INFO sqlalchemy.engine.Engine [cached since 5.513s ago] ('33f53153-3625-4f52-b40f-28d1ce20acdd',)
+INFO:     127.0.0.1:60166 - "POST /api/sessions/dca7d058-da24-4231-9bfd-cc9ef34b0d3e/generate HTTP/1.1" 200 OK
+2026-05-08 22:43:39,477 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:44:06,531 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:06,532 INFO sqlalchemy.engine.Engine INSERT INTO sessions (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+2026-05-08 22:44:06,532 INFO sqlalchemy.engine.Engine [cached since 32.78s ago] ('7e5f5c61-6498-41d6-b1c1-9685bb27b9c1', 'agent direct gen', 'idle', '2026-05-08 14:44:06.532214', '2026-05-08 14:44:06.532214')
+2026-05-08 22:44:06,533 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:06,580 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:06,581 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:44:06,581 INFO sqlalchemy.engine.Engine [cached since 32.78s ago] ('7e5f5c61-6498-41d6-b1c1-9685bb27b9c1',)
+2026-05-08 22:44:06,582 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:06,583 INFO sqlalchemy.engine.Engine [cached since 32.78s ago] ('cff2990b-dce7-49eb-9117-cf75d62ea59c', '7e5f5c61-6498-41d6-b1c1-9685bb27b9c1', 'system', '欢迎使用 LamImager，输入指令开始图像生成，或打开右侧助手侧栏使用优化、规划等功能。', 'text', '{}', '2026-05-08 14:44:06.582988')
+2026-05-08 22:44:06,584 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:06,624 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:06,625 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at, coalesce(anon_1.message_count, ?) AS message_count, coalesce(anon_2.cost, ?) AS cost, coalesce(anon_2.tokens, ?) AS tokens 
+FROM sessions LEFT OUTER JOIN (SELECT messages.session_id AS session_id, count(messages.id) AS message_count 
+FROM messages GROUP BY messages.session_id) AS anon_1 ON anon_1.session_id = sessions.id LEFT OUTER JOIN (SELECT billing_records.session_id AS session_id, coalesce(sum(billing_records.cost), ?) AS cost, coalesce(sum(billing_records.tokens_in + billing_records.tokens_out), ?) AS tokens 
+FROM billing_records GROUP BY billing_records.session_id) AS anon_2 ON anon_2.session_id = sessions.id ORDER BY sessions.updated_at DESC
+2026-05-08 22:44:06,625 INFO sqlalchemy.engine.Engine [cached since 32.78s ago] (0, 0, 0, 0, 0)
+INFO:     127.0.0.1:65259 - "POST /api/sessions HTTP/1.1" 200 OK
+2026-05-08 22:44:06,627 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:44:06,677 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:06,677 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:06,678 INFO sqlalchemy.engine.Engine [cached since 32.76s ago] ('79fde703-c959-4e49-ad9a-6a08006c0f6e', '7e5f5c61-6498-41d6-b1c1-9685bb27b9c1', 'user', '???????????????', 'text', '{"agent_mode": true, "agent_tools": ["generate_image"], "agent_plan_strategy": ""}', '2026-05-08 14:44:06.677244')
+2026-05-08 22:44:06,679 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:44:06,680 INFO sqlalchemy.engine.Engine [cached since 32.76s ago] ('7e5f5c61-6498-41d6-b1c1-9685bb27b9c1',)
+2026-05-08 22:44:06,680 INFO sqlalchemy.engine.Engine UPDATE sessions SET updated_at=? WHERE sessions.id = ?
+2026-05-08 22:44:06,681 INFO sqlalchemy.engine.Engine [cached since 32.76s ago] ('2026-05-08 14:44:06.680346', '7e5f5c61-6498-41d6-b1c1-9685bb27b9c1')
+2026-05-08 22:44:06,682 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:06,728 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:06,729 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:44:06,730 INFO sqlalchemy.engine.Engine [cached since 32.77s ago] ('79fde703-c959-4e49-ad9a-6a08006c0f6e',)
+2026-05-08 22:44:06,731 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:44:06,732 INFO sqlalchemy.engine.Engine [cached since 32.77s ago] ('default_optimize_provider_id',)
+2026-05-08 22:44:06,733 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.id = ?
+2026-05-08 22:44:06,733 INFO sqlalchemy.engine.Engine [cached since 32.77s ago] ('b2af5e18-3975-40b7-8fa7-3b644c767e3d',)
+2026-05-08 22:44:06,734 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:44:06,734 INFO sqlalchemy.engine.Engine [cached since 32.76s ago] ('web_search',)
+2026-05-08 22:44:06,735 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:44:06,736 INFO sqlalchemy.engine.Engine [cached since 32.77s ago] ('search_retry_count',)
+2026-05-08 22:44:06,736 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:44:06,737 INFO sqlalchemy.engine.Engine [cached since 32.77s ago] ('image_gen',)
+2026-05-08 22:44:13,144 INFO sqlalchemy.engine.Engine INSERT INTO billing_records (id, session_id, provider_id, billing_type, tokens_in, tokens_out, cost, currency, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:13,144 INFO sqlalchemy.engine.Engine [cached since 33.76s ago] ('536e1ec0-6d15-4f4d-88b7-5a374f56928c', '7e5f5c61-6498-41d6-b1c1-9685bb27b9c1', 'b2af5e18-3975-40b7-8fa7-3b644c767e3d', 'per_token', 357, 210, 2.268e-06, 'CNY', '{"type": "assistant", "rounds": 1, "tools_used": ["generate_image"]}', '2026-05-08 14:44:13.144616')
+2026-05-08 22:44:13,145 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:13,358 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:13,359 INFO sqlalchemy.engine.Engine SELECT billing_records.id, billing_records.session_id, billing_records.provider_id, billing_records.billing_type, billing_records.tokens_in, billing_records.tokens_out, billing_records.cost, billing_records.currency, billing_records.detail, billing_records.created_at 
+FROM billing_records 
+WHERE billing_records.id = ?
+2026-05-08 22:44:13,359 INFO sqlalchemy.engine.Engine [cached since 33.93s ago] ('536e1ec0-6d15-4f4d-88b7-5a374f56928c',)
+2026-05-08 22:44:13,360 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:13,360 INFO sqlalchemy.engine.Engine [cached since 39.45s ago] ('23e91c81-63d0-499d-b95c-3764ce6533cf', '7e5f5c61-6498-41d6-b1c1-9685bb27b9c1', 'assistant', '你好！我可以帮你做这些：\n\n- 找设计灵感、风格参考\n- 搜索图片做情绪板\n- 分析品牌/海报/UI 方向\n- 生成图片\n\n你刚刚发的是“???????????????”，可能是：\n1. 想测试我是否在线\n2. 输入乱码了\n3. 想让我直接开始设计/生图\n\n你可以直接这样说 ... (24 characters truncated) ...  参考”\n- “搜索赛博朋克海报风格图片”\n- “做一张夏日饮品广告图”\n- “给我生成一张高级感护肤品产品图”\n\n如果你愿意，我也可以直接开始。请告诉我：\n1. 你想搜索还是生成图片\n2. 主题是什么\n3. 风格偏好是什么\n4. 用途是什么（海报、Logo、社媒封面、产品图等）', 'agent', '{"steps": [], "final_output": "\\u4f60\\u597d\\uff01\\u6211\\u53ef\\u4ee5\\u5e2e\\u4f60\\u505a\\u8fd9\\u4e9b\\uff1a\\n\\n- \\u627e\\u8bbe\\u8ba1\\u70 ... (1429 characters truncated) ... 2\\u5c01\\u9762\\u3001\\u4ea7\\u54c1\\u56fe\\u7b49\\uff09", "images": [], "tokens_in": 357, "tokens_out": 210, "cost": 2.268e-06, "cancelled": false}', '2026-05-08 14:44:13.360551')
+2026-05-08 22:44:13,361 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:13,402 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:13,403 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:44:13,403 INFO sqlalchemy.engine.Engine [cached since 39.44s ago] ('23e91c81-63d0-499d-b95c-3764ce6533cf',)
+INFO:     127.0.0.1:65259 - "POST /api/sessions/7e5f5c61-6498-41d6-b1c1-9685bb27b9c1/generate HTTP/1.1" 200 OK
+2026-05-08 22:44:13,404 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:44:33,182 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:33,183 INFO sqlalchemy.engine.Engine INSERT INTO sessions (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+2026-05-08 22:44:33,184 INFO sqlalchemy.engine.Engine [cached since 59.43s ago] ('bc4f7fa7-1939-4da8-a285-83bcf3f92c1e', 'agent plan list', 'idle', '2026-05-08 14:44:33.183493', '2026-05-08 14:44:33.183493')
+2026-05-08 22:44:33,185 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:33,361 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:33,362 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:44:33,362 INFO sqlalchemy.engine.Engine [cached since 59.56s ago] ('bc4f7fa7-1939-4da8-a285-83bcf3f92c1e',)
+2026-05-08 22:44:33,364 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:33,364 INFO sqlalchemy.engine.Engine [cached since 59.56s ago] ('e4a9b8f0-7355-47a7-a797-3f9debd251b5', 'bc4f7fa7-1939-4da8-a285-83bcf3f92c1e', 'system', '欢迎使用 LamImager，输入指令开始图像生成，或打开右侧助手侧栏使用优化、规划等功能。', 'text', '{}', '2026-05-08 14:44:33.364052')
+2026-05-08 22:44:33,365 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:33,406 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:33,406 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at, coalesce(anon_1.message_count, ?) AS message_count, coalesce(anon_2.cost, ?) AS cost, coalesce(anon_2.tokens, ?) AS tokens 
+FROM sessions LEFT OUTER JOIN (SELECT messages.session_id AS session_id, count(messages.id) AS message_count 
+FROM messages GROUP BY messages.session_id) AS anon_1 ON anon_1.session_id = sessions.id LEFT OUTER JOIN (SELECT billing_records.session_id AS session_id, coalesce(sum(billing_records.cost), ?) AS cost, coalesce(sum(billing_records.tokens_in + billing_records.tokens_out), ?) AS tokens 
+FROM billing_records GROUP BY billing_records.session_id) AS anon_2 ON anon_2.session_id = sessions.id ORDER BY sessions.updated_at DESC
+2026-05-08 22:44:33,407 INFO sqlalchemy.engine.Engine [cached since 59.56s ago] (0, 0, 0, 0, 0)
+INFO:     127.0.0.1:61222 - "POST /api/sessions HTTP/1.1" 200 OK
+2026-05-08 22:44:33,408 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:44:33,448 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:33,448 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:33,448 INFO sqlalchemy.engine.Engine [cached since 59.53s ago] ('0061cd0d-e273-46f2-afdc-d279ee224f67', 'bc4f7fa7-1939-4da8-a285-83bcf3f92c1e', 'user', '???????????????? plan ??(action=list)?', 'text', '{"agent_mode": true, "agent_tools": ["plan"], "agent_plan_strategy": ""}', '2026-05-08 14:44:33.448692')
+2026-05-08 22:44:33,449 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:44:33,450 INFO sqlalchemy.engine.Engine [cached since 59.53s ago] ('bc4f7fa7-1939-4da8-a285-83bcf3f92c1e',)
+2026-05-08 22:44:33,451 INFO sqlalchemy.engine.Engine UPDATE sessions SET updated_at=? WHERE sessions.id = ?
+2026-05-08 22:44:33,451 INFO sqlalchemy.engine.Engine [cached since 59.53s ago] ('2026-05-08 14:44:33.450715', 'bc4f7fa7-1939-4da8-a285-83bcf3f92c1e')
+2026-05-08 22:44:33,452 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:33,499 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:33,500 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:44:33,500 INFO sqlalchemy.engine.Engine [cached since 59.54s ago] ('0061cd0d-e273-46f2-afdc-d279ee224f67',)
+2026-05-08 22:44:33,501 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:44:33,502 INFO sqlalchemy.engine.Engine [cached since 59.54s ago] ('default_optimize_provider_id',)
+2026-05-08 22:44:33,503 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.id = ?
+2026-05-08 22:44:33,503 INFO sqlalchemy.engine.Engine [cached since 59.54s ago] ('b2af5e18-3975-40b7-8fa7-3b644c767e3d',)
+2026-05-08 22:44:33,504 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:44:33,505 INFO sqlalchemy.engine.Engine [cached since 59.54s ago] ('web_search',)
+2026-05-08 22:44:33,506 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:44:33,506 INFO sqlalchemy.engine.Engine [cached since 59.54s ago] ('search_retry_count',)
+2026-05-08 22:44:33,507 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:44:33,507 INFO sqlalchemy.engine.Engine [cached since 59.54s ago] ('image_gen',)
+2026-05-08 22:44:42,790 INFO sqlalchemy.engine.Engine INSERT INTO billing_records (id, session_id, provider_id, billing_type, tokens_in, tokens_out, cost, currency, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:42,791 INFO sqlalchemy.engine.Engine [cached since 63.4s ago] ('cadb9d27-7246-45d9-beaf-a3910e14e456', 'bc4f7fa7-1939-4da8-a285-83bcf3f92c1e', 'b2af5e18-3975-40b7-8fa7-3b644c767e3d', 'per_token', 913, 168, 4.324e-06, 'CNY', '{"type": "assistant", "rounds": 2, "tools_used": ["plan"]}', '2026-05-08 14:44:42.790045')
+2026-05-08 22:44:42,792 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:42,837 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:42,838 INFO sqlalchemy.engine.Engine SELECT billing_records.id, billing_records.session_id, billing_records.provider_id, billing_records.billing_type, billing_records.tokens_in, billing_records.tokens_out, billing_records.cost, billing_records.currency, billing_records.detail, billing_records.created_at 
+FROM billing_records 
+WHERE billing_records.id = ?
+2026-05-08 22:44:42,839 INFO sqlalchemy.engine.Engine [cached since 63.41s ago] ('cadb9d27-7246-45d9-beaf-a3910e14e456',)
+2026-05-08 22:44:42,839 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:44:42,840 INFO sqlalchemy.engine.Engine [cached since 68.93s ago] ('b9ccccd7-6cba-4aa9-b05e-6de641da2a9f', 'bc4f7fa7-1939-4da8-a285-83bcf3f92c1e', 'assistant', '我这边暂时不能直接列出 `plan` 模板，工具返回的是：**“计划工具需要数据库会话”**，说明当前会话环境里没有可用的数据库上下文。\n\n你可以这样继续：\n1. 先提供数据库/会话上下文后再让我执行 `plan(action="list")`\n2. 或者直接告诉我你的目标，我可以不依赖模板，直接帮你现生成一个计划\n3. 如果你愿意，我也可以先根据常见需求给你手写一个计划草案\n\n如果要继续，直接发：\n- `帮我生成一个XXX计划`\n或\n- `继续尝试列出 plan 模板`', 'agent', '{"steps": [{"type": "tool_call", "name": "plan", "args": {"action": "list"}}, {"type": "tool_result", "name": "plan", "content": "\\u8ba1\\u5212\\u5d ... (1287 characters truncated) ... 7\\u7eed\\u5c1d\\u8bd5\\u5217\\u51fa plan \\u6a21\\u677f`", "images": [], "tokens_in": 913, "tokens_out": 168, "cost": 4.324e-06, "cancelled": false}', '2026-05-08 14:44:42.839744')
+2026-05-08 22:44:42,841 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:44:42,880 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:44:42,882 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:44:42,882 INFO sqlalchemy.engine.Engine [cached since 68.92s ago] ('b9ccccd7-6cba-4aa9-b05e-6de641da2a9f',)
+INFO:     127.0.0.1:61222 - "POST /api/sessions/bc4f7fa7-1939-4da8-a285-83bcf3f92c1e/generate HTTP/1.1" 200 OK
+2026-05-08 22:44:42,884 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:45:01,419 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:45:01,420 INFO sqlalchemy.engine.Engine INSERT INTO sessions (id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+2026-05-08 22:45:01,420 INFO sqlalchemy.engine.Engine [cached since 87.67s ago] ('8d921fb6-94f7-48d5-b1fe-4ab886440acf', 'agent gen image', 'idle', '2026-05-08 14:45:01.420160', '2026-05-08 14:45:01.420160')
+2026-05-08 22:45:01,421 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:45:01,729 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:45:01,730 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:45:01,730 INFO sqlalchemy.engine.Engine [cached since 87.93s ago] ('8d921fb6-94f7-48d5-b1fe-4ab886440acf',)
+2026-05-08 22:45:01,732 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:45:01,732 INFO sqlalchemy.engine.Engine [cached since 87.93s ago] ('920e5467-4ec2-4da6-aae9-7ce426fd3365', '8d921fb6-94f7-48d5-b1fe-4ab886440acf', 'system', '欢迎使用 LamImager，输入指令开始图像生成，或打开右侧助手侧栏使用优化、规划等功能。', 'text', '{}', '2026-05-08 14:45:01.732250')
+2026-05-08 22:45:01,733 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:45:01,773 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:45:01,774 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at, coalesce(anon_1.message_count, ?) AS message_count, coalesce(anon_2.cost, ?) AS cost, coalesce(anon_2.tokens, ?) AS tokens 
+FROM sessions LEFT OUTER JOIN (SELECT messages.session_id AS session_id, count(messages.id) AS message_count 
+FROM messages GROUP BY messages.session_id) AS anon_1 ON anon_1.session_id = sessions.id LEFT OUTER JOIN (SELECT billing_records.session_id AS session_id, coalesce(sum(billing_records.cost), ?) AS cost, coalesce(sum(billing_records.tokens_in + billing_records.tokens_out), ?) AS tokens 
+FROM billing_records GROUP BY billing_records.session_id) AS anon_2 ON anon_2.session_id = sessions.id ORDER BY sessions.updated_at DESC
+2026-05-08 22:45:01,775 INFO sqlalchemy.engine.Engine [cached since 87.92s ago] (0, 0, 0, 0, 0)
+INFO:     127.0.0.1:55615 - "POST /api/sessions HTTP/1.1" 200 OK
+2026-05-08 22:45:01,777 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-08 22:45:01,818 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:45:01,818 INFO sqlalchemy.engine.Engine INSERT INTO messages (id, session_id, role, content, message_type, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+2026-05-08 22:45:01,819 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('58e93795-42db-4b83-afce-94c6400bce7a', '8d921fb6-94f7-48d5-b1fe-4ab886440acf', 'user', "???? generate_image ??,????????????,?? prompt='cyberpunk cat neon lights futuristic city'", 'text', '{"agent_mode": true, "agent_tools": ["generate_image"], "agent_plan_strategy": ""}', '2026-05-08 14:45:01.818988')
+2026-05-08 22:45:01,821 INFO sqlalchemy.engine.Engine SELECT sessions.id, sessions.title, sessions.status, sessions.created_at, sessions.updated_at 
+FROM sessions 
+WHERE sessions.id = ?
+2026-05-08 22:45:01,821 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('8d921fb6-94f7-48d5-b1fe-4ab886440acf',)
+2026-05-08 22:45:01,822 INFO sqlalchemy.engine.Engine UPDATE sessions SET updated_at=? WHERE sessions.id = ?
+2026-05-08 22:45:01,823 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('2026-05-08 14:45:01.822073', '8d921fb6-94f7-48d5-b1fe-4ab886440acf')
+2026-05-08 22:45:01,823 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-08 22:45:01,862 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-08 22:45:01,862 INFO sqlalchemy.engine.Engine SELECT messages.id, messages.session_id, messages.role, messages.content, messages.message_type, messages.metadata, messages.created_at 
+FROM messages 
+WHERE messages.id = ?
+2026-05-08 22:45:01,863 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('58e93795-42db-4b83-afce-94c6400bce7a',)
+2026-05-08 22:45:01,864 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:45:01,864 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('default_optimize_provider_id',)
+2026-05-08 22:45:01,864 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.id = ?
+2026-05-08 22:45:01,865 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('b2af5e18-3975-40b7-8fa7-3b644c767e3d',)
+2026-05-08 22:45:01,866 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:45:01,866 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('web_search',)
+2026-05-08 22:45:01,867 INFO sqlalchemy.engine.Engine SELECT app_settings.id, app_settings."key", app_settings.value, app_settings.updated_at 
+FROM app_settings 
+WHERE app_settings."key" = ?
+2026-05-08 22:45:01,868 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('search_retry_count',)
+2026-05-08 22:45:01,868 INFO sqlalchemy.engine.Engine SELECT api_providers.id, api_providers.nickname, api_providers.base_url, api_providers.model_id, api_providers.api_key_enc, api_providers.provider_type, api_providers.billing_type, api_providers.unit_price, api_providers.currency, api_providers.is_active, api_providers.created_at, api_providers.updated_at 
+FROM api_providers 
+WHERE api_providers.provider_type = ? AND api_providers.is_active = 1
+2026-05-08 22:45:01,869 INFO sqlalchemy.engine.Engine [cached since 87.9s ago] ('image_gen',)
+2026-05-08 22:45:45,124 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:55615 - "POST /api/sessions/8d921fb6-94f7-48d5-b1fe-4ab886440acf/generate HTTP/1.1" 500 Internal Server Error

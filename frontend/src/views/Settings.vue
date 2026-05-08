@@ -58,6 +58,11 @@
         <label>最大并发任务数</label>
         <input v-model.number="defaultModels.max_concurrent" type="number" min="1" max="20" @change="saveDefaultModels" />
       </div>
+      <div class="form-group">
+        <label>搜索重试次数</label>
+        <input v-model.number="searchRetryCount" type="number" min="1" max="5" @change="saveSearchRetryCount" />
+        <span class="form-hint">Agent 搜索工具单次请求最多尝试次数</span>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -104,6 +109,7 @@ const defaultModels = reactive<DefaultModelsConfig>({
   default_image_height: 1024,
   max_concurrent: 5,
 })
+const searchRetryCount = ref(3)
 
 onMounted(async () => {
   await providerStore.fetchProviders()
@@ -117,6 +123,10 @@ onMounted(async () => {
     if (data.default_image_width) defaultModels.default_image_width = data.default_image_width
     if (data.default_image_height) defaultModels.default_image_height = data.default_image_height
     if (data.max_concurrent) defaultModels.max_concurrent = data.max_concurrent
+    try {
+      const retryRes = await settingsApi.getSetting('search_retry_count')
+      if (retryRes.data && retryRes.data.value != null) searchRetryCount.value = retryRes.data.value
+    } catch { /* ignore */ }
   } catch { /* ignore */ }
 })
 
@@ -124,6 +134,15 @@ async function saveDefaultModels() {
   try {
     await settingsApi.setDefaultModels({ ...defaultModels })
     showSaveMsg('设置已保存', 'success')
+  } catch {
+    showSaveMsg('保存失败', 'error')
+  }
+}
+
+async function saveSearchRetryCount() {
+  try {
+    await settingsApi.setSetting('search_retry_count', { value: searchRetryCount.value })
+    showSaveMsg('已保存', 'success')
   } catch {
     showSaveMsg('保存失败', 'error')
   }

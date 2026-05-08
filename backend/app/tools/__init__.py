@@ -37,6 +37,10 @@ def register_tool(tool: Tool) -> Tool:
 
 from app.tools.web_search import WebSearchTool
 from app.tools.image_search import ImageSearchTool
+from app.tools.generate_image import GenerateImageTool
+from app.tools.plan import PlanTool
 
 registry.register(WebSearchTool())
 registry.register(ImageSearchTool())
+registry.register(GenerateImageTool())
+registry.register(PlanTool())

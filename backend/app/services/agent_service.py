@@ -59,6 +59,14 @@ class ErrorEvent(AgentEvent):
 
 
 @dataclass
+class WarningEvent(AgentEvent):
+    type: str = "tool_warning"
+    name: str = ""
+    reason: str = ""
+    retry_count: int = 0
+
+
+@dataclass
 class CancelledEvent(AgentEvent):
     type: str = "cancelled"
     partial_output: str = ""
@@ -157,6 +165,33 @@ async def run_agent_loop(
         except Exception as e:
             logger.warning(f"Tool api key decryption failed: {e}")
 
+    search_retry_count = 3
+    try:
+        from app.services.settings_service import get_setting
+        setting = await get_setting(db, "search_retry_count")
+        if setting and isinstance(setting, dict):
+            search_retry_count = int(setting.get("value", 3))
+    except Exception:
+        pass
+
+    image_provider_result = await db.execute(
+        select(ApiProvider).where(
+            ApiProvider.provider_type == ProviderType.image_gen,
+            ApiProvider.is_active == True,
+        )
+    )
+    image_provider = image_provider_result.scalars().first()
+    image_api_key = ""
+    image_base_url = ""
+    image_model_id = ""
+    if image_provider:
+        try:
+            image_api_key = decrypt(image_provider.api_key_enc)
+            image_base_url = image_provider.base_url
+            image_model_id = image_provider.model_id
+        except Exception as e:
+            logger.warning(f"Image api key decryption failed: {e}")
+
     total_tokens_in = 0
     total_tokens_out = 0
     working_messages = list(messages)
@@ -226,6 +261,10 @@ async def run_agent_loop(
                 try:
                     exec_kwargs = dict(fn_args)
                     exec_kwargs["api_key"] = tool_api_key
+                    exec_kwargs["retry_count"] = search_retry_count
+                    exec_kwargs["image_api_key"] = image_api_key
+                    exec_kwargs["image_base_url"] = image_base_url
+                    exec_kwargs["image_model_id"] = image_model_id
                     tool_result = await tool.execute(**exec_kwargs)
                     result_content = tool_result.content
                     result_meta = tool_result.meta

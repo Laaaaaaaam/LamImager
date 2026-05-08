@@ -49,10 +49,10 @@
         <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role">
           <div class="message-content" :class="msg.message_type">
             <template v-if="msg.message_type === 'text'">
-              <p>{{ msg.content }}</p>
+              <div v-html="renderMarkdown(msg.content)"></div>
             </template>
             <template v-else-if="msg.message_type === 'image'">
-              <p>{{ msg.content }}</p>
+              <div v-html="renderMarkdown(msg.content)"></div>
               <div class="image-grid">
                 <div v-for="(url, i) in (msg.metadata?.image_urls || [])" :key="i" class="image-item">
                   <img :src="url" :alt="'图片 ' + (i + 1)" @click="openImage(url)" @contextmenu.prevent="showImageContextMenu($event, url)" />
@@ -75,7 +75,7 @@
               </div>
             </template>
             <template v-else-if="msg.message_type === 'optimization'">
-              <p>{{ msg.content }}</p>
+              <div v-html="renderMarkdown(msg.content)"></div>
               <div class="optimization-compare">
                 <div class="compare-side">
                   <div class="compare-label">原始</div>
@@ -94,7 +94,7 @@
                 <div class="plan-card-header" @click="togglePlanCard(msg.id)">
                   <div class="plan-card-title">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-                    <span>{{ msg.content }}</span>
+                    <span v-html="renderMarkdown(msg.content)"></span>
                   </div>
                   <div class="plan-card-meta">
                     <span class="plan-step-count">{{ (msg.metadata?.steps || []).length }} 个步骤</span>
@@ -122,7 +122,7 @@
               </div>
             </template>
             <template v-else-if="msg.message_type === 'error'">
-              <p class="error-text">{{ msg.content }}</p>
+              <div class="error-text" v-html="renderMarkdown(msg.content)"></div>
             </template>
             <template v-else-if="msg.message_type === 'agent'">
               <div class="agent-card">
@@ -136,11 +136,11 @@
                     <span class="agent-step-name">{{ step.name }}</span>
                   </div>
                 </div>
-                <div class="agent-card-content">{{ msg.content }}</div>
+                <div class="agent-card-content" v-html="renderMarkdown(msg.content)"></div>
               </div>
             </template>
             <template v-else>
-              <p>{{ msg.content }}</p>
+              <div v-html="renderMarkdown(msg.content)"></div>
             </template>
           </div>
         </div>
@@ -336,7 +336,7 @@
                   <img v-for="(att, i) in m.attachments" :key="i" v-if="att.type.startsWith('image/')" :src="att.preview" class="msg-attachment-thumb" />
                 </div>
               </template>
-              <div class="dialog-msg-content">{{ m.content }}</div>
+              <div class="dialog-msg-content" v-html="renderMarkdown(m.content)"></div>
               <button class="dialog-msg-copy" @click="copyToClipboard(m.content)" title="复制">
                 <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
               </button>
@@ -661,6 +661,7 @@ const dialogTextarea = ref<HTMLTextAreaElement | null>(null)
 const dialogContainer = ref<HTMLElement | null>(null)
 const responseStyle = ref<'default' | 'verbose' | 'concise'>('default')
 const showDialogSettings = ref(false)
+const searchEnabled = ref(false)
 
 const optimizeDirections = [
   { key: 'detail_enhancement', label: '细节增强', desc: '提升画面细节与清晰度' },
@@ -947,6 +948,53 @@ function copyToClipboard(text: string) {
     document.execCommand('copy')
     document.body.removeChild(textarea)
   })
+}
+
+function renderMarkdown(text: string): string {
+  let html = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return `<pre><code>${escaped.trim()}</code></pre>`
+  })
+
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
+
+  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
+
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
+
+  html = html.replace(/^>\s?(.+)$/gm, '<blockquote>$1</blockquote>')
+
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
+
+  html = html.replace(/^(\d+)\.\s(.+)$/gm, '<li value="$1">$2</li>')
+  html = html.replace(/^[-*]\s(.+)$/gm, '<li>$1</li>')
+
+  html = html.replace(/(<li[^>]*>[\s\S]*?<\/li>\n?)+/g, (match) => {
+    const isOrdered = /value=/.test(match)
+    return `<${isOrdered ? 'ol' : 'ul'}>${match}</${isOrdered ? 'ol' : 'ul'}>`
+  })
+
+  html = html.replace(/---+/g, '<hr>')
+
+  html = html.replace(/\n\s*\n/g, '</p><p>')
+  html = html.replace(/\n/g, '<br>')
+
+  html = html.replace(/<p><\/p>/g, '')
+  html = `<p>${html}</p>`
+
+  html = html.replace(/<p>(<(?:h[1-3]|pre|ul|ol|blockquote|hr))/g, '$1')
+  html = html.replace(/(<\/(?:h[1-3]|pre|ul|ol|blockquote|hr)>)<\/p>/g, '$1')
+
+  return html
 }
 
 function saveDialogHistory() {
@@ -2833,8 +2881,68 @@ watch(selectedSkillIds, (ids) => {
 }
 
 .dialog-msg-content {
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.dialog-msg-content p {
+  margin: 0 0 6px 0;
+}
+
+.dialog-msg-content p:last-child {
+  margin-bottom: 0;
+}
+
+.dialog-msg-content code {
+  background: var(--hover);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.dialog-msg-content pre {
+  background: var(--hover);
+  padding: 8px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 6px 0;
+  font-size: 11px;
+}
+
+.dialog-msg-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.dialog-msg-content ul,
+.dialog-msg-content ol {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+
+.dialog-msg-content blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  margin: 6px 0;
+  color: var(--text-secondary);
+}
+
+.dialog-msg-content h1,
+.dialog-msg-content h2,
+.dialog-msg-content h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 8px 0 4px 0;
+}
+
+.dialog-msg-content a {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.dialog-msg-content hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 8px 0;
 }
 
 .dialog-msg-copy {

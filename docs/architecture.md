@@ -113,6 +113,8 @@ User Input (with optional attachments + reference images)
 └──────────────────┘
 ```
 
+**Iterative Refinement**: When using `plan_strategy: "iterative"`, the frontend fetches previous step outputs via `/api/images/proxy?url=` (server-side proxy, avoids CORS) and passes them as `reference_images` to the next step, enabling chained image-to-image refinement.
+
 ### LLM Assistant Flow (Streaming)
 
 ```

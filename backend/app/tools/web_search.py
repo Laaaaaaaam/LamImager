@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 import aiohttp
 
 from app.tools.base import Tool, ToolResult
+
+logger = logging.getLogger(__name__)
+
+QUERY_VARIANTS = ["", "参考", "设计", "trending", "examples"]
 
 
 class WebSearchTool(Tool):
@@ -29,50 +35,88 @@ class WebSearchTool(Tool):
 
     async def execute(self, query: str = "", max_results: int = 5, **kwargs) -> ToolResult:
         api_key = kwargs.get("api_key", "")
+        retry_count = int(kwargs.get("retry_count", 3))
         if not api_key:
             return ToolResult(
                 content="搜索失败：未配置联网搜索API密钥，请在API管理中添加 provider_type=web_search 的提供商",
                 meta={"error": "missing_api_key"},
             )
 
-        url = "https://google.serper.dev/search"
-        headers = {
-            "X-API-KEY": api_key,
-            "Content-Type": "application/json",
-        }
-        payload = {
-            "q": query,
-            "num": min(max_results, 10),
-        }
+        content, sources, attempts, best = await _search_with_retry(
+            api_key, query, max_results, retry_count, "search"
+        )
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        return ToolResult(
-                            content=f"搜索返回错误 {resp.status}: {text[:200]}",
-                            meta={"error": f"http_{resp.status}"},
-                        )
-                    data = await resp.json()
-        except aiohttp.ClientError as e:
+        if not sources:
             return ToolResult(
-                content=f"搜索连接失败: {e}",
-                meta={"error": "connection_error"},
+                content=f"搜索未找到相关结果（尝试{attempts}次）", meta={"sources": [], "query": query, "attempts": attempts}
             )
 
-        organic = data.get("organic", [])
-        if not organic:
-            return ToolResult(content="未找到相关搜索结果。", meta={"sources": [], "query": query})
-
         lines = []
-        sources = []
-        for i, item in enumerate(organic[:max_results], 1):
+        src_list = []
+        for i, item in enumerate(sources[:max_results], 1):
             title = item.get("title", "无标题")
             link = item.get("link", "")
             snippet = item.get("snippet", "")
             lines.append(f"{i}. [{title}]({link})\n   {snippet}")
-            sources.append({"title": title, "url": link, "snippet": snippet})
+            src_list.append({"title": title, "url": link, "snippet": snippet})
 
-        content = "\n\n".join(lines)
-        return ToolResult(content=content, meta={"sources": sources, "query": query})
+        return ToolResult(
+            content="\n\n".join(lines),
+            meta={"sources": src_list, "query": query, "attempts": attempts, "best_attempt": best},
+        )
+
+
+async def _search_with_retry(
+    api_key: str,
+    query: str,
+    max_results: int,
+    retry_count: int,
+    endpoint: str,
+) -> tuple[str, list[dict], int, int]:
+    url = f"https://google.serper.dev/{endpoint}"
+    all_sources = []
+    best_idx = 0
+
+    for attempt in range(min(retry_count, len(QUERY_VARIANTS))):
+        variant = QUERY_VARIANTS[attempt]
+        q = f"{query} {variant}".strip() if variant else query
+        sources = await _do_search(api_key, url, q, max_results)
+        all_sources.append(sources)
+        if len(sources) > len(all_sources[best_idx]):
+            best_idx = attempt
+        if len(sources) >= 3:
+            break
+
+    attempts = len(all_sources)
+    if best_idx < len(all_sources) and all_sources[best_idx]:
+        merged_sources = _merge_sources(all_sources)
+        content = f"搜索完成（尝试{attempts}次）"
+        return content, merged_sources, attempts, best_idx
+
+    return "", [], attempts, -1
+
+
+async def _do_search(api_key: str, url: str, query: str, max_results: int) -> list[dict]:
+    headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
+    payload = {"q": query, "num": min(max_results, 10)}
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    return []
+                data = await resp.json()
+                return data.get("organic", data.get("images", []))
+    except aiohttp.ClientError:
+        return []
+
+
+def _merge_sources(all_sources: list[list[dict]]) -> list[dict]:
+    seen = set()
+    merged = []
+    for sources in all_sources:
+        for s in sources:
+            key = s.get("link", "") or s.get("imageUrl", "")
+            if key and key not in seen:
+                seen.add(key)
+                merged.append(s)
+    return merged
