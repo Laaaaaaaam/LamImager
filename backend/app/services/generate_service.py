@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_provider import ApiProvider, ProviderType
+from app.models.message import Message
 from app.services.billing_service import record_billing, calc_cost
 from app.schemas.session import GenerateRequest, MessageCreate
 from app.schemas.prompt import PromptOptimizeRequest
@@ -564,6 +565,28 @@ async def _execute_style_anchor(
         return {"error": str(e)}
 
 
+async def _build_agent_context(db: AsyncSession, session_id: str) -> list[dict]:
+    import json
+    result = await db.execute(
+        select(Message).where(Message.session_id == session_id).order_by(Message.created_at.asc()).limit(10)
+    )
+    msgs = result.scalars().all()
+    context = []
+    for m in msgs[-8:]:
+        if m.role in ("user", "assistant") and m.message_type in ("text", "agent"):
+            content = m.content[:500] if m.content else ""
+            if m.message_type == "agent" and m.metadata_:
+                try:
+                    import json
+                    meta = json.loads(m.metadata_) if isinstance(m.metadata_, str) else m.metadata_
+                    content = meta.get("final_output", content)[:500]
+                except Exception:
+                    pass
+            if content.strip():
+                context.append({"role": m.role.value if hasattr(m.role, "value") else m.role, "content": content})
+    return context
+
+
 def _compute_grid_config(n: int) -> tuple[int, int]:
     if n <= 2:
         return 1, n
@@ -740,6 +763,13 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         {"role": "system", "content": AGENT_SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
     ]
+
+    try:
+        history = await _build_agent_context(db, session_id)
+        if history:
+            messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}] + history + [{"role": "user", "content": prompt}]
+    except Exception:
+        pass
 
     steps = []
     final_output = ""
