@@ -575,6 +575,85 @@ def _compute_grid_config(n: int) -> tuple[int, int]:
         return 4, (n + 3) // 4
 
 
+async def _expand_grid_images(
+    db: AsyncSession,
+    session_id: str,
+    grid_images: list[str],
+    grid_config: dict,
+    task_manager: TaskManager,
+    accumulated_images: list[str],
+    steps: list[dict],
+) -> dict | None:
+    n = len(grid_images)
+    if n == 0:
+        return None
+    cols = grid_config.get("cols", 2)
+
+    image_provider_id = await _get_default_provider(db, "default_image_provider_id")
+    if not image_provider_id:
+        result = await db.execute(
+            select(ApiProvider).where(
+                ApiProvider.provider_type == ProviderType.image_gen,
+                ApiProvider.is_active == True,
+            )
+        )
+        p = result.scalars().first()
+        if p:
+            image_provider_id = p.id
+
+    if not image_provider_id:
+        return None
+
+    provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
+    provider = provider_result.scalar_one_or_none()
+    if not provider:
+        return None
+
+    try:
+        api_key = decrypt(provider.api_key_enc)
+    except Exception:
+        return None
+
+    client = ImageClient(provider.base_url, api_key, provider.model_id)
+
+    for i in range(n):
+        ref = grid_images[i]
+        task_manager.update_task(session_id, TaskStatus.GENERATING,
+            progress=i + 1, total=n,
+            message=f"展开子项 {i + 1}/{n}")
+
+        row = i // cols
+        col = i % cols
+        item_prompt = f"grid cell ({row+1},{col+1}), consistent style with reference"
+
+        try:
+            response = await client.generate(
+                prompt=item_prompt,
+                n=1,
+                size="1024x1024",
+                reference_images=[ref],
+            )
+            urls = ImageClient.extract_images(response)
+            if urls:
+                accumulated_images.extend(urls)
+                await add_system_message(db, session_id,
+                    f"Agent 展开子项 {i+1}/{n}",
+                    message_type="image",
+                    metadata={"image_urls": urls},
+                )
+                steps.append({"type": "grid_expand", "index": i, "row": row, "col": col})
+        except Exception as e:
+            logger.warning(f"Grid expand #{i} failed: {e}")
+
+    task_manager.update_task(session_id, TaskStatus.IDLE)
+    return {
+        "images": accumulated_images,
+        "steps": steps,
+        "strategy": "grid_expand",
+        "cancelled": False,
+    }
+
+
 async def _crop_grid(image_url: str, cols: int, rows: int) -> list[str]:
     try:
         from PIL import Image as PILImage
@@ -702,6 +781,15 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                     message_type="image",
                     metadata={"image_urls": urls},
                 )
+            if event.name == "generate_image" and event.meta and event.meta.get("grid_images"):
+                grid_imgs = event.meta.get("grid_images", [])
+                grid_config = event.meta.get("grid_config", {})
+                result = await _expand_grid_images(
+                    db, session_id, grid_imgs, grid_config,
+                    task_manager, accumulated_images, steps,
+                )
+                if result:
+                    return result
             if event.name == "plan" and event.meta and event.meta.get("strategy") == "style_anchor":
                 result = await _execute_style_anchor(
                     db, session_id, event.meta, data,
