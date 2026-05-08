@@ -135,7 +135,7 @@ Body:
 }
 ```
 
-Message types: `text` | `image` | `optimization` | `plan` | `skill` | `error`
+Message types: `text` | `image` | `optimization` | `plan` | `skill` | `error` | `agent`
 
 Plan message metadata:
 ```json
@@ -168,7 +168,10 @@ Body:
   "reference_images": ["data:image/png;base64,..."],
   "reference_labels": [{"index": 1, "source": "upload", "name": "photoA.png"}],
   "context_messages": [{"role": "user", "content": "...", "image_urls": ["http://localhost:8000/api/images/xxx.png"]}],
-  "plan_strategy": "parallel"
+  "plan_strategy": "parallel",
+  "agent_mode": false,
+  "agent_tools": ["web_search", "image_search", "generate_image", "plan"],
+  "agent_plan_strategy": ""
 }
 ```
 
@@ -181,6 +184,40 @@ Response: `Message` (assistant message with generated images)
 >
 > **Multimodal Context**: `context_messages` can include `image_urls` for LLM visual context.
 > When present, backend builds multimodal messages via `_build_multimodal_context()`.
+>
+> **Agent Mode**: When `agent_mode` is `true`, the endpoint delegates to `handle_agent_generate`
+> which invokes `AgentLoop` with the specified `agent_tools`. Available tools: `web_search`,
+> `image_search`, `generate_image`, `plan`. The LLM autonomously decides tool invocation order.
+
+### Cancel Agent Task
+```
+POST /api/sessions/{id}/cancel
+```
+Cancels ongoing agent task. Sets `asyncio.Event` per session, agent loop checks between rounds.
+
+Response: `{"message": "Cancelled"}`
+
+### Agent Checkpoint
+```
+POST /api/sessions/{id}/agent/checkpoint
+```
+Approve or reject agent checkpoint (e.g. anchor grid quality check).
+
+Body:
+```json
+{
+  "approved": true,
+  "feedback": ""
+}
+```
+
+Response:
+```json
+{
+  "status": "approved",
+  "step": "anchor_grid"
+}
+```
 
 ### Proxy Image
 ```
@@ -238,7 +275,7 @@ GET /api/providers
 ```
 
 Query Parameters:
-- `provider_type` (optional): `image_gen` | `llm`
+- `provider_type` (optional): `image_gen` | `llm` | `web_search`
 
 Response: `ApiProvider[]`
 
@@ -458,7 +495,7 @@ Response:
 }
 ```
 
-Operation types: `image_gen` | `optimize` | `assistant` | `plan` | `vision`
+Operation types: `image_gen` | `optimize` | `assistant` | `plan` | `vision` | `agent` | `tool`
 
 ---
 
@@ -579,10 +616,13 @@ Body:
 
 `stream_type`: `"assistant"` (default) for general chat, used for billing categorization.
 
-`agent_tools` (optional): List of tool names the LLM can invoke. Supported values: `web_search`, `image_search`. When provided, the backend enables function calling and the response stream includes `tool_call` and `tool_result` events in addition to regular tokens.
+`agent_tools` (optional): List of tool names the LLM can invoke. Supported values: `web_search`, `image_search`, `generate_image`, `plan`. When provided, the backend enables function calling and the response stream includes `tool_call` and `tool_result` events in addition to regular tokens.
 
 SSE Events:
 - `data: {"token": "word"}` - Each generated token
+- `data: {"tool_call": {"name": "web_search", "args": {"query": "..."}}}` - Tool invocation
+- `data: {"tool_result": {"name": "web_search", "content": "...", "meta": {...}}}` - Tool execution result
+- `data: {"tool_warning": {"name": "...", "reason": "...", "retry_count": 0}}` - Tool retry exhausted
 - `data: {"done": true, "cost": 0.001}` - Completion event with billing
 - `data: {"error": "message"}` - Error event
 

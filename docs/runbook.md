@@ -56,6 +56,26 @@ ls -la frontend/dist/
 
 ---
 
+## Configuration
+
+### API Providers
+Configure in UI at **API 配置** page or via API:
+
+**LLM Provider**: OpenAI-compatible `/v1/chat/completions` endpoint
+**Image Provider**: OpenAI-compatible `/v1/images/generations` endpoint  
+**Web Search Provider**: Serper.dev (配置方式：API管理 → 新建 → 类型选 `联网搜索` → 填写 Serper API Key)
+
+| Provider Type | ui label | API URL | Required |
+|---------------|----------|---------|----------|
+| `llm` | LLM | OpenAI-compatible | Yes |
+| `image_gen` | 图像生成 | OpenAI-compatible | Yes |
+| `web_search` | 联网搜索 | https://google.serper.dev | For agent search |
+
+### Settings
+Settings page configures: default providers, image size (W×H), max concurrent tasks, **search retry count** (default 3).
+
+---
+
 ## Common Operations
 
 ### Reset Database

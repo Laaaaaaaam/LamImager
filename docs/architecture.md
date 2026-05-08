@@ -203,6 +203,61 @@ plaintext = AESGCM(key).decrypt(nonce, ciphertext, None)
 - `GET /api/billing/breakdown` returns costs grouped by provider and by operation type
 - Frontend billing drawer displays both tables (API spending + operation type breakdown)
 
+## Agent System
+
+The Agent system provides LLM-driven autonomous tool orchestration through Function Calling.
+
+### Architecture
+
+```
+User Input (Agent mode)
+    │
+    ▼
+┌──────────────────────────────────────┐
+│              AgentLoop               │
+│  LLM Chat → Detect tool_calls →      │
+│  Execute tools → Inject results →    │
+│  Loop until finish_reason=stop        │
+└──────────┬───────────────────────────┘
+           │
+           ▼
+┌──────────────────────────────────────┐
+│              Tool Registry            │
+│  web_search → Serper API             │
+│  image_search → Serper API           │
+│  generate_image → ImageClient        │
+│  plan → plan_template_service        │
+└──────────────────────────────────────┘
+```
+
+### Tools (backend/app/tools/)
+- **base.py**: `Tool` abstract class + `ToolResult` dataclass
+- **web_search.py** / **image_search.py**: Serper.dev integration, internal 3x retry
+- **generate_image.py**: Wraps ImageClient, supports `grid_config` for multi-item sets
+- **plan.py**: Wraps plan_template_service CRUD + template matching
+
+### AgentLoop (backend/app/services/agent_service.py)
+- `run_agent_loop()`: async generator yielding `AgentEvent` types (TokenEvent, ToolCallEvent, ToolResultEvent, DoneEvent, CancelledEvent, WarningEvent)
+- Tool provider injection: web_search and image_gen API keys decrypted and passed to tool execution
+- Billing per round (LLM) + per tool call
+- Cancel support: `asyncio.Event` per session
+
+### Style Anchor Flow
+For multi-item generation (e.g. "4 emoji pack"):
+1. LLM → `plan(action="list")` → sees「套图生成」template
+2. LLM → `plan(action="apply")` → triggers `_execute_style_anchor` in `generate_service.py`
+3. Code generates anchor grid → PIL crops into cells → per-cell image generation with reference
+
+### SSE Events
+| Event | Data |
+|-------|------|
+| `token` | `{type:"token", content:"..."}` |
+| `tool_call` | `{type:"tool_call", name:"web_search", args:{query:"..."}}` |
+| `tool_result` | `{type:"tool_result", name:"web_search", content:"...", meta:{...}}` |
+| `tool_warning` | `{type:"tool_warning", name:"web_search", reason:"retry exhausted"}` |
+| `checkpoint` | `{type:"checkpoint", step:"anchor_grid", image_url:"..."}` |
+| `done` | `{type:"done", usage:{tokens_in, tokens_out}}` |
+
 ## Concurrency Model
 
 - Backend: Async/await with asyncio
