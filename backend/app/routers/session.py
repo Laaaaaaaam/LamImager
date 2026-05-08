@@ -3,6 +3,7 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -114,3 +115,22 @@ async def api_cancel(session_id: str):
     task_manager = TaskManager()
     task_manager.cancel_task(session_id)
     return {"message": "Cancelled"}
+
+
+class CheckpointRequest(BaseModel):
+    approved: bool = True
+    feedback: str = ""
+
+
+@router.post("/{session_id}/agent/checkpoint")
+async def api_agent_checkpoint(session_id: str, data: CheckpointRequest):
+    task_manager = TaskManager()
+    state = task_manager.get_checkpoint_state(session_id)
+    if not state:
+        return {"status": "no_checkpoint"}
+    if data.approved:
+        task_manager.clear_checkpoint_state(session_id)
+        return {"status": "approved", "step": state.get("step")}
+    else:
+        task_manager.clear_checkpoint_state(session_id)
+        return {"status": "rejected", "feedback": data.feedback}

@@ -40,6 +40,7 @@ class TaskManager:
         self._queue_counter = 0
         self._semaphore = asyncio.Semaphore(5)
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._checkpoint_states: dict[str, dict] = {}
 
     async def acquire(self):
         await self._semaphore.acquire()
@@ -104,9 +105,19 @@ class TaskManager:
         if event:
             event.set()
 
+    def set_checkpoint_state(self, session_id: str, state: dict):
+        self._checkpoint_states[session_id] = state
+
+    def get_checkpoint_state(self, session_id: str) -> dict | None:
+        return self._checkpoint_states.get(session_id)
+
+    def clear_checkpoint_state(self, session_id: str):
+        self._checkpoint_states.pop(session_id, None)
+
     def cleanup_task(self, session_id: str):
         self._tasks.pop(session_id, None)
         self._cancel_events.pop(session_id, None)
+        self._checkpoint_states.pop(session_id, None)
 
     def _broadcast(self, event: dict):
         for queue in self._queues.values():

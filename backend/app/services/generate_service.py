@@ -518,6 +518,8 @@ async def _execute_style_anchor(
             metadata={"image_urls": [anchor_url]},
         )
 
+        task_manager.set_checkpoint_state(session_id, {"step": "anchor_grid", "image_url": anchor_url, "cols": cols, "rows": rows})
+
         grid_images = await _crop_grid(anchor_url, cols, rows)
         if not grid_images or len(grid_images) < n_items:
             return {"error": f"Grid crop failed: got {len(grid_images)} cells, need {n_items}"}
