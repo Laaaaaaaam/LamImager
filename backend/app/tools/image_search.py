@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import aiohttp
+
 from app.tools.base import Tool, ToolResult
 from app.tools.web_search import _search_with_retry
 
