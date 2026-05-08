@@ -145,7 +145,7 @@ async def run_agent_loop(
 
     tool_provider_result = await db.execute(
         select(ApiProvider).where(
-            ApiProvider.provider_type == ProviderType.tool,
+            ApiProvider.provider_type == ProviderType.web_search,
             ApiProvider.is_active == True,
         )
     )

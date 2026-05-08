@@ -31,7 +31,7 @@ class WebSearchTool(Tool):
         api_key = kwargs.get("api_key", "")
         if not api_key:
             return ToolResult(
-                content="搜索失败：未配置搜索API密钥，请在API管理中添加 provider_type=tool 的提供商",
+                content="搜索失败：未配置联网搜索API密钥，请在API管理中添加 provider_type=web_search 的提供商",
                 meta={"error": "missing_api_key"},
             )
 

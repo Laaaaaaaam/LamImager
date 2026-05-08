@@ -297,46 +297,37 @@
 
       <div class="assistant-content">
         <div v-if="assistantTab === 'dialog'" class="tab-dialog">
-          <div class="context-toggle">
-            <button
-              class="toggle-btn"
-              :class="{ active: contextMode === 'shared' }"
-              @click="contextMode = 'shared'"
-            >共享上下文</button>
-            <button
-              class="toggle-btn"
-              :class="{ active: contextMode === 'current' }"
-              @click="contextMode = 'current'"
-            >仅当前输入</button>
+          <div class="dialog-config-bar">
+            <div class="context-toggle" style="border: none; margin-bottom: 0;">
+              <button
+                class="toggle-btn"
+                :class="{ active: responseStyle === 'default' }"
+                @click="responseStyle = 'default'"
+              >默认</button>
+              <button
+                class="toggle-btn"
+                :class="{ active: responseStyle === 'verbose' }"
+                @click="responseStyle = 'verbose'"
+              >详细</button>
+              <button
+                class="toggle-btn"
+                :class="{ active: responseStyle === 'concise' }"
+                @click="responseStyle = 'concise'"
+              >简洁</button>
+            </div>
+            <button class="dialog-settings-btn" :class="{ active: showDialogSettings }" @click="showDialogSettings = !showDialogSettings" title="更多设置">
+              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
           </div>
-          <div class="context-toggle" style="margin-top: 6px;">
-            <button
-              class="toggle-btn"
-              :class="{ active: memoryMode === 'global' }"
-              @click="memoryMode = 'global'"
-            >全局跨窗口</button>
-            <button
-              class="toggle-btn"
-              :class="{ active: memoryMode === 'session' }"
-              @click="memoryMode = 'session'"
-            >仅当前会话</button>
-          </div>
-          <div class="context-toggle" style="margin-top: 6px;">
-            <button
-              class="toggle-btn"
-              :class="{ active: responseStyle === 'default' }"
-              @click="responseStyle = 'default'"
-            >默认</button>
-            <button
-              class="toggle-btn"
-              :class="{ active: responseStyle === 'verbose' }"
-              @click="responseStyle = 'verbose'"
-            >详细</button>
-            <button
-              class="toggle-btn"
-              :class="{ active: responseStyle === 'concise' }"
-              @click="responseStyle = 'concise'"
-            >简洁</button>
+          <div v-if="showDialogSettings" class="dialog-settings-panel">
+            <div class="context-toggle">
+              <button class="toggle-btn" :class="{ active: contextMode === 'shared' }" @click="contextMode = 'shared'">共享上下文</button>
+              <button class="toggle-btn" :class="{ active: contextMode === 'current' }" @click="contextMode = 'current'">仅当前输入</button>
+            </div>
+            <div class="context-toggle" style="margin-top: 6px;">
+              <button class="toggle-btn" :class="{ active: memoryMode === 'global' }" @click="memoryMode = 'global'">全局跨窗口</button>
+              <button class="toggle-btn" :class="{ active: memoryMode === 'session' }" @click="memoryMode = 'session'">仅当前会话</button>
+            </div>
           </div>
           <div class="dialog-messages" ref="dialogContainer">
             <div v-for="m in dialogMessages" :key="m.id" class="dialog-msg" :class="m.role">
@@ -666,11 +657,10 @@ if (savedDialog) {
   } catch { /* ignore */ }
 }
 const dialogInput = ref('')
-const searchEnabled = ref(false)
-const dialogToolCalls = ref<{ id: string; name: string; args?: Record<string,unknown>; content?: string; collapsed: boolean }[]>([])
 const dialogTextarea = ref<HTMLTextAreaElement | null>(null)
 const dialogContainer = ref<HTMLElement | null>(null)
 const responseStyle = ref<'default' | 'verbose' | 'concise'>('default')
+const showDialogSettings = ref(false)
 
 const optimizeDirections = [
   { key: 'detail_enhancement', label: '细节增强', desc: '提升画面细节与清晰度' },
@@ -2762,6 +2752,52 @@ watch(selectedSkillIds, (ids) => {
 .toggle-btn.active {
   background: var(--accent);
   color: var(--card);
+}
+
+.dialog-config-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-bottom: 0;
+}
+
+.dialog-config-bar .context-toggle {
+  flex: 1;
+}
+
+.dialog-settings-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.dialog-settings-btn:hover {
+  background: var(--hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.dialog-settings-btn.active {
+  background: var(--accent);
+  color: var(--card);
+  border-color: var(--accent);
+}
+
+.dialog-settings-panel {
+  flex-shrink: 0;
+  margin-top: 6px;
+  margin-bottom: 2px;
 }
 
 .tab-dialog {

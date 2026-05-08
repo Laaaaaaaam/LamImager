@@ -4,7 +4,7 @@ export interface ApiProvider {
   base_url: string
   model_id: string
   api_key_masked: string
-  provider_type: 'image_gen' | 'llm' | 'tool'
+  provider_type: 'image_gen' | 'llm' | 'web_search'
   billing_type: 'per_call' | 'per_token'
   unit_price: number
   currency: string
@@ -18,7 +18,7 @@ export interface ApiProviderCreate {
   base_url: string
   model_id: string
   api_key: string
-  provider_type: 'image_gen' | 'llm' | 'tool'
+  provider_type: 'image_gen' | 'llm' | 'web_search'
   billing_type?: 'per_call' | 'per_token'
   unit_price?: number
   currency?: string
