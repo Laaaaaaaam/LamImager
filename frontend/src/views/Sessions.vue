@@ -232,9 +232,26 @@
             <button
               v-for="n in [1, 2, 4, 8]" :key="n"
               class="count-btn"
-              :class="{ active: imageCount === n }"
-              @click="imageCount = n"
+              :class="{ active: imageCount === n && !customCount }"
+              @click="setCount(n)"
             >{{ n }}</button>
+            <template v-if="customCount">
+              <input
+                v-model.number="imageCount"
+                type="number"
+                class="count-input"
+                min="1"
+                max="16"
+                @blur="clampCount"
+                @keyup.enter="clampCount"
+                ref="customCountInput"
+              />
+            </template>
+            <button
+              v-else
+              class="count-btn custom-toggle"
+              @click="openCustomCount"
+            >+自定义</button>
             <span class="option-label size-label">尺寸:</span>
             <input
               v-model.number="imageWidth"
@@ -560,6 +577,25 @@ const inputText = ref('')
 const agentMode = ref(false)
 const negativePrompt = ref('')
 const imageCount = ref(1)
+const customCount = ref(false)
+const customCountInput = ref<HTMLInputElement | null>(null)
+
+function setCount(n: number) {
+  imageCount.value = n
+  customCount.value = false
+}
+
+function openCustomCount() {
+  customCount.value = true
+  nextTick(() => {
+    customCountInput.value?.focus()
+  })
+}
+
+function clampCount() {
+  if (imageCount.value < 1) imageCount.value = 1
+  if (imageCount.value > 16) imageCount.value = 16
+}
 const imageWidth = ref(1024)
 const imageHeight = ref(1024)
 const noSizeLimit = ref(false)
@@ -2732,7 +2768,30 @@ watch(selectedSkillIds, (ids) => {
 
 .count-btn.active {
   background: var(--accent);
-  color: var(--card);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.count-btn.custom-toggle {
+  font-size: 12px;
+  padding: 0 6px;
+  opacity: 0.7;
+}
+
+.count-input {
+  width: 52px;
+  height: 26px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  text-align: center;
+  font-size: 13px;
+  background: var(--card);
+  outline: none;
+  color: var(--text);
+}
+
+.count-input:focus {
   border-color: var(--accent);
 }
 

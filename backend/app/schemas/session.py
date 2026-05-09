@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class SessionCreate(BaseModel):
@@ -47,7 +47,7 @@ class GenerateRequest(BaseModel):
     session_id: str | None = None
     prompt: str
     negative_prompt: str = ""
-    image_count: int = 1
+    image_count: int = Field(1, ge=1, le=16)
     image_size: str = "1024x1024"
     skill_ids: list[str] = []
     optimize_directions: list[str] = []

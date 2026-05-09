@@ -19,6 +19,7 @@ from app.services.session_manager import add_message, add_system_message, messag
 from app.services.skill_engine import apply_skill, get_skill
 from app.services.rule_engine import apply_rules, get_active_rules
 from app.services.prompt_optimizer import optimize_prompt
+from app.services.settings_service import get_setting
 from app.services.agent_service import run_agent_loop, AGENT_SYSTEM_PROMPT, ErrorEvent
 from app.services.task_manager import TaskManager, TaskStatus
 from app.utils.crypto import decrypt
@@ -125,59 +126,27 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
             return {"error": "No image provider configured"}
         image_provider_id = provider.id
 
-    provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
-    provider = provider_result.scalar_one_or_none()
-    if not provider:
-        task_manager.update_task(session_id, TaskStatus.ERROR, message="图像生成API未找到")
-        await add_system_message(db, session_id, "图像生成API未找到", message_type="error")
-        return {"error": "Image provider not found"}
+    task_manager.update_task(session_id, TaskStatus.GENERATING, progress=0, total=data.image_count, message=f"生成中 0/{data.image_count}")
 
     try:
-        api_key = decrypt(provider.api_key_enc)
-    except Exception as e:
-        task_manager.update_task(session_id, TaskStatus.ERROR, message="API密钥解密失败")
-        await add_system_message(db, session_id, "API密钥解密失败，请重新在API管理中配置密钥（机器指纹可能已变更）", message_type="error")
-        return {"error": f"API key decryption failed: {e}"}
+        all_image_urls, tokens_in, tokens_out = await generate_images_core(
+            db=db,
+            provider_id=image_provider_id,
+            prompt=prompt,
+            image_count=data.image_count,
+            image_size=data.image_size,
+            reference_images=data.reference_images if data.reference_images else None,
+            reference_labels=data.reference_labels,
+            negative_prompt=data.negative_prompt,
+        )
 
-    client = ImageClient(provider.base_url, api_key, provider.model_id)
+        provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
+        provider = provider_result.scalar_one_or_none()
+        if not provider:
+            raise ValueError("Image provider not found")
 
-    try:
-        all_image_urls = []
-        semaphore = asyncio.Semaphore(5)
-        task_manager.update_task(session_id, TaskStatus.GENERATING, progress=0, total=data.image_count, message=f"生成中 0/{data.image_count}")
-
-        if data.reference_images:
-            chat_edit_usage = {}
-            result = await _generate_with_references(
-                db, session_id, client, provider, prompt, data, all_image_urls, semaphore, chat_edit_usage
-            )
-            if result:
-                return result
-            tokens_in = chat_edit_usage.get("tokens_in", 0)
-            tokens_out = chat_edit_usage.get("tokens_out", 0)
-        else:
-            tokens_in = 0
-            tokens_out = 0
-            async def generate_one(idx):
-                async with semaphore:
-                    try:
-                        response = await client.generate(
-                            prompt=prompt,
-                            negative_prompt=data.negative_prompt,
-                            n=1,
-                            size=data.image_size,
-                        )
-                        return ImageClient.extract_images(response)
-                    except Exception as e:
-                        logger.error(f"Image generation #{idx} failed: {e}")
-                        return []
-
-            tasks = [generate_one(i) for i in range(data.image_count)]
-            results = await asyncio.gather(*tasks)
-            for urls in results:
-                all_image_urls.extend(urls)
-
-        cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=data.image_count)
+        actual_call_count = data.image_count if data.reference_images else 1
+        cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=actual_call_count)
 
         await record_billing(
             db,
@@ -211,6 +180,10 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
             "prompt": prompt,
         }
 
+    except ValueError as e:
+        task_manager.update_task(session_id, TaskStatus.ERROR, message=str(e))
+        await add_system_message(db, session_id, str(e), message_type="error")
+        return {"error": str(e)}
     except Exception as e:
         import traceback
         logger.error(f"handle_generate failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
@@ -225,6 +198,118 @@ async def _get_default_provider(db: AsyncSession, setting_key: str) -> str | Non
     if result and isinstance(result, dict):
         return result.get("provider_id")
     return None
+
+
+async def generate_images_core(
+    db: AsyncSession,
+    provider_id: str,
+    prompt: str,
+    image_count: int = 1,
+    image_size: str = "1024x1024",
+    reference_images: list[str] | None = None,
+    reference_labels: list[str] | None = None,
+    negative_prompt: str = "",
+) -> tuple[list[str], int, int]:
+    """Core image generation: provider lookup + decrypt + generate. No session-side effects."""
+    result = await db.execute(select(ApiProvider).where(ApiProvider.id == provider_id))
+    provider = result.scalar_one_or_none()
+    if not provider:
+        raise ValueError(f"Image provider not found: {provider_id}")
+
+    api_key = decrypt(provider.api_key_enc)
+    client = ImageClient(provider.base_url, api_key, provider.model_id)
+
+    all_image_urls: list[str] = []
+    tokens_in = 0
+    tokens_out = 0
+
+    if reference_images:
+        concurrent_val = await get_setting(db, "max_concurrent")
+        max_concurrent = concurrent_val.get("value", 5) if concurrent_val else 5
+        semaphore = asyncio.Semaphore(max_concurrent)
+        try:
+            response = await client.chat_edit(
+                prompt=prompt,
+                images=reference_images,
+                reference_labels=reference_labels,
+            )
+            urls = ImageClient.extract_images_from_chat(response)
+            usage = response.get("usage", {})
+            tokens_in += usage.get("prompt_tokens", 0)
+            tokens_out += usage.get("completion_tokens", 0)
+            if urls:
+                all_image_urls.extend(urls)
+                remaining = image_count - len(urls)
+                if remaining > 0:
+                    async def _chat_edit_one(idx):
+                        async with semaphore:
+                            try:
+                                r = await client.chat_edit(prompt=prompt, images=reference_images, reference_labels=reference_labels)
+                                return ImageClient.extract_images_from_chat(r), r.get("usage", {})
+                            except Exception as e:
+                                logger.error(f"Chat edit #{idx} failed: {e}")
+                                return [], {}
+
+                    tasks = [_chat_edit_one(i) for i in range(remaining)]
+                    results_list = await asyncio.gather(*tasks)
+                    for u_list, u_usage in results_list:
+                        all_image_urls.extend(u_list)
+                        tokens_in += u_usage.get("prompt_tokens", 0)
+                        tokens_out += u_usage.get("completion_tokens", 0)
+            else:
+                raise ImageGenNotSupportedError("Chat API returned no images")
+        except ImageGenNotSupportedError:
+            pass
+        except ImageGenError as e:
+            logger.warning(f"Chat edit failed: {e}")
+
+        if not all_image_urls:
+            try:
+                response = await client.edit(prompt=prompt, images=reference_images, n=1, size=image_size)
+                urls = ImageClient.extract_images(response)
+                all_image_urls.extend(urls)
+                remaining = image_count - len(urls)
+                if remaining > 0:
+                    async def _edit_one(idx):
+                        async with semaphore:
+                            try:
+                                r = await client.edit(prompt=prompt, images=reference_images, n=1, size=image_size)
+                                return ImageClient.extract_images(r)
+                            except Exception as e:
+                                logger.error(f"Image edit #{idx} failed: {e}")
+                                return []
+
+                    tasks = [_edit_one(i) for i in range(remaining)]
+                    results_list = await asyncio.gather(*tasks)
+                    for u_list in results_list:
+                        all_image_urls.extend(u_list)
+            except Exception as e:
+                logger.warning(f"Image edit not supported or failed: {e}")
+
+        if not all_image_urls:
+            prompt = await _apply_vision_fallback_core(db, prompt, reference_images)
+            async def _generate_one(idx):
+                async with semaphore:
+                    try:
+                        r = await client.generate(prompt=prompt, negative_prompt=negative_prompt, n=1, size=image_size)
+                        return ImageClient.extract_images(r)
+                    except Exception as e:
+                        logger.error(f"Image generation #{idx} failed: {e}")
+                        return []
+
+            tasks = [_generate_one(i) for i in range(image_count)]
+            results_list = await asyncio.gather(*tasks)
+            for u_list in results_list:
+                all_image_urls.extend(u_list)
+    else:
+        try:
+            r = await client.generate(prompt=prompt, negative_prompt=negative_prompt, n=image_count, size=image_size)
+            urls = ImageClient.extract_images(r)
+            all_image_urls.extend(urls)
+        except Exception as e:
+            logger.error(f"Pure text generation failed: {e}")
+
+    return all_image_urls, tokens_in, tokens_out
 
 
 async def _describe_reference_images(db: AsyncSession, provider_id: str, reference_images: list[str], session_id: str | None = None) -> str:
@@ -283,137 +368,8 @@ async def _describe_reference_images(db: AsyncSession, provider_id: str, referen
     return description
 
 
-async def _generate_with_references(
+async def _apply_vision_fallback_core(
     db: AsyncSession,
-    session_id: str,
-    client: ImageClient,
-    provider: ApiProvider,
-    prompt: str,
-    data: GenerateRequest,
-    all_image_urls: list[str],
-    semaphore: asyncio.Semaphore,
-    chat_edit_tokens: dict,
-) -> dict | None:
-    try:
-        response = await client.chat_edit(
-            prompt=prompt,
-            images=data.reference_images,
-            reference_labels=data.reference_labels,
-        )
-        urls = ImageClient.extract_images_from_chat(response)
-        usage = response.get("usage", {})
-        chat_edit_tokens["tokens_in"] = chat_edit_tokens.get("tokens_in", 0) + usage.get("prompt_tokens", 0)
-        chat_edit_tokens["tokens_out"] = chat_edit_tokens.get("tokens_out", 0) + usage.get("completion_tokens", 0)
-        if urls:
-            all_image_urls.extend(urls)
-            await add_system_message(db, session_id,
-                f"使用多模态图生图模式（Chat API），已参考 {len(data.reference_images)} 张图片",
-                message_type="text",
-            )
-
-            remaining = data.image_count - len(urls)
-            if remaining > 0:
-                async def chat_edit_one(idx):
-                    async with semaphore:
-                        try:
-                            response = await client.chat_edit(
-                                prompt=prompt,
-                                images=data.reference_images,
-                                reference_labels=data.reference_labels,
-                            )
-                            urls_result = ImageClient.extract_images_from_chat(response)
-                            c_usage = response.get("usage", {})
-                            chat_edit_tokens["tokens_in"] = chat_edit_tokens.get("tokens_in", 0) + c_usage.get("prompt_tokens", 0)
-                            chat_edit_tokens["tokens_out"] = chat_edit_tokens.get("tokens_out", 0) + c_usage.get("completion_tokens", 0)
-                            return urls_result
-                        except Exception as e:
-                            logger.error(f"Chat edit #{idx} failed: {e}")
-                            return []
-
-                tasks = [chat_edit_one(i) for i in range(remaining)]
-                results = await asyncio.gather(*tasks)
-                for u in results:
-                    all_image_urls.extend(u)
-
-            return None
-        else:
-            raise ImageGenNotSupportedError("Chat API returned no images")
-    except ImageGenNotSupportedError as e:
-        logger.info(f"Chat edit not available: {e}")
-    except ImageGenError as e:
-        logger.warning(f"Chat edit via {provider.model_id} failed: {e}")
-
-    try:
-        response = await client.edit(
-            prompt=prompt,
-            images=data.reference_images,
-            n=1,
-            size=data.image_size,
-        )
-        urls = ImageClient.extract_images(response)
-        all_image_urls.extend(urls)
-        await add_system_message(db, session_id,
-            f"使用原生图生图模式（Edits API），已参考 {len(data.reference_images)} 张图片",
-            message_type="text",
-        )
-
-        remaining = data.image_count - len(urls)
-        if remaining > 0:
-            async def edit_one(idx):
-                async with semaphore:
-                    try:
-                        response = await client.edit(
-                            prompt=prompt,
-                            images=data.reference_images,
-                            n=1,
-                            size=data.image_size,
-                        )
-                        return ImageClient.extract_images(response)
-                    except Exception as e:
-                        logger.error(f"Image edit #{idx} failed: {e}")
-                        return []
-
-            tasks = [edit_one(i) for i in range(remaining)]
-            results = await asyncio.gather(*tasks)
-            for urls in results:
-                all_image_urls.extend(urls)
-
-        return None
-
-    except ImageGenError as e:
-        logger.warning(f"Image edit API not supported by {provider.model_id}: {e}")
-        await add_system_message(db, session_id,
-            f"当前模型 {provider.model_id} 不支持原生图生图，降级为视觉分析模式",
-            message_type="text",
-        )
-
-        prompt = await _apply_vision_fallback(db, session_id, prompt, data.reference_images)
-
-        async def generate_one(idx):
-            async with semaphore:
-                try:
-                    response = await client.generate(
-                        prompt=prompt,
-                        negative_prompt=data.negative_prompt,
-                        n=1,
-                        size=data.image_size,
-                    )
-                    return ImageClient.extract_images(response)
-                except Exception as e:
-                    logger.error(f"Image generation #{idx} failed: {e}")
-                    return []
-
-        tasks = [generate_one(i) for i in range(data.image_count)]
-        results = await asyncio.gather(*tasks)
-        for urls in results:
-            all_image_urls.extend(urls)
-
-        return None
-
-
-async def _apply_vision_fallback(
-    db: AsyncSession,
-    session_id: str,
     prompt: str,
     reference_images: list[str],
 ) -> str:
@@ -431,19 +387,10 @@ async def _apply_vision_fallback(
 
     if llm_provider_id:
         try:
-            image_desc = await _describe_reference_images(db, llm_provider_id, reference_images, session_id)
-            await add_system_message(db, session_id,
-                f"已分析 {len(reference_images)} 张参考图片并融入提示词",
-                message_type="text",
-                metadata={"image_descriptions": image_desc},
-            )
+            image_desc = await _describe_reference_images(db, llm_provider_id, reference_images, None)
             return f"{prompt}\n\n[参考图片视觉描述]:\n{image_desc}"
         except Exception as e:
             logger.warning(f"Vision fallback failed: {e}")
-            await add_system_message(db, session_id,
-                "参考图片视觉分析失败，将仅使用文本提示词。请确保配置了支持视觉的LLM。",
-                message_type="text",
-            )
 
     return prompt
 
@@ -461,11 +408,12 @@ async def _execute_radiate(
     tokens_out: int,
     cost_total: float,
 ) -> dict | None:
-    items = plan_meta.get("items", data.agent_tools)
+    items = plan_meta.get("items") or []
     if isinstance(items, dict):
         items = []
     n_items = len(items) if items else 0
     if n_items == 0:
+        logger.warning("_execute_radiate: no items in plan_meta, skipping radiate expansion")
         return None
 
     image_provider_id = await _get_default_provider(db, "default_image_provider_id")
@@ -510,7 +458,7 @@ async def _execute_radiate(
             ).order_by(Message.created_at.desc()).limit(1)
         )
         user_msg = msg_result.scalars().first()
-        user_text = user_msg.content if user_msg else prompt
+        user_text = user_msg.content if user_msg else data.prompt
         style_desc = _extract_style_from_text(user_text)
         theme = style_desc
 
@@ -584,11 +532,11 @@ async def _execute_radiate(
 async def _build_agent_context(db: AsyncSession, session_id: str) -> list[dict]:
     import json
     result = await db.execute(
-        select(Message).where(Message.session_id == session_id).order_by(Message.created_at.asc()).limit(10)
+        select(Message).where(Message.session_id == session_id).order_by(Message.created_at.asc()).limit(8)
     )
     msgs = result.scalars().all()
     context = []
-    for m in msgs[-8:]:
+    for m in msgs:
         if m.role in ("user", "assistant") and m.message_type in ("text", "agent"):
             content = m.content[:500] if m.content else ""
             if m.message_type == "agent" and m.metadata_:
@@ -608,15 +556,23 @@ def _extract_items_from_text(text: str) -> list[dict]:
     items = []
     emojis = {
         "开心": "happy expression", "难过": "sad expression", "生气": "angry expression",
+        "愤怒": "angry furious expression",
         "惊讶": "surprised expression", "哭泣": "crying expression", "笑": "laughing smile expression",
         "爱": "love heart expression", "酷": "cool expression", "委屈": "upset expression",
-        "晕": "dizzy expression", "害羞": "shy expression", "睡觉": "sleeping expression",
+        "晕": "dizzy expression", "害羞": "shy expression",
+        "吃饭": "eating food expression", "睡觉": "sleeping expression",
         "胜利": "victory expression", "加油": "cheer expression", "疑问": "question expression",
         "无语": "speechless expression",
     }
     for kw, prompt in emojis.items():
         if kw in text:
             items.append({"prompt": prompt})
+    if not items:
+        count_match = re.search(r'(\d+)\s*[张张个]', text)
+        if count_match:
+            count = int(count_match.group(1))
+            for i in range(count):
+                items.append({"prompt": f"item {i+1}"})
     return items
 
 
@@ -805,6 +761,53 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         await add_system_message(db, session_id, "未配置LLM，请先在API管理中添加", message_type="error")
         return {"error": "No LLM provider configured"}
 
+    image_provider_id = await _get_default_provider(db, "default_image_provider_id")
+    if not image_provider_id:
+        provider_result = await db.execute(
+            select(ApiProvider).where(
+                ApiProvider.provider_type == ProviderType.image_gen,
+                ApiProvider.is_active == True,
+            )
+        )
+        image_provider = provider_result.scalars().first()
+        if image_provider:
+            image_provider_id = image_provider.id
+
+    # Direct radiate routing for 套图/表情包/系列/组 requests
+    import re as _re
+    _set_keywords = ["套图", "表情包", "表情", "套", "组图", "系列图", "图标集"]
+    _is_set_request = any(kw in prompt for kw in _set_keywords)
+    _count_m = _re.search(r'(\d+)\s*[张张个]', prompt)
+    _n_items = int(_count_m.group(1)) if _count_m else 0
+    if _is_set_request and _n_items >= 2:
+        from app.models.plan_template import PlanTemplate
+        tpl_result = await db.execute(
+            select(PlanTemplate).where(
+                PlanTemplate.name == "套图生成",
+                PlanTemplate.is_builtin == True,
+            )
+        )
+        radiate_template = tpl_result.scalar_one_or_none()
+        if radiate_template:
+            items = _extract_items_from_text(prompt)
+            style = _extract_style_from_text(prompt)
+            radiate_meta = {
+                "items": items,
+                "style": style,
+                "overall_theme": prompt,
+                "strategy": "radiate",
+                "steps": radiate_template.steps or [],
+            }
+            logger.info(f"Direct radiate routing: {_n_items} items, style={style}")
+            steps = [{"type": "radiate", "strategy": "radiate", "items": items}]
+            result = await _execute_radiate(
+                db, session_id, radiate_meta, data,
+                task_manager, [], steps,
+                llm_provider_id, 0, 0, 0.0,
+            )
+            if result:
+                return result
+
     messages = [
         {"role": "system", "content": AGENT_SYSTEM_PROMPT},
         {"role": "user", "content": prompt},
@@ -827,18 +830,21 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
 
     cancel_event = task_manager.get_cancel_event(session_id)
 
+    CORE_AGENT_TOOLS = ["generate_image", "plan"]
+    all_tools = list(set(CORE_AGENT_TOOLS + (data.agent_tools or [])))
+
     async for event in run_agent_loop(
         db=db,
         provider_id=llm_provider_id,
         messages=messages,
-        tools=data.agent_tools,
+        tools=all_tools,
         session_id=session_id,
         cancel_event=cancel_event,
     ):
         if event.type == "error":
             task_manager.update_task(session_id, TaskStatus.ERROR, message=event.error)
-            await add_system_message(db, session_id, f"Agent 执行失败: {event.error}", message_type="error")
-            return {"error": event.error}
+            final_output = f"Agent 执行失败: {event.error}"
+            break
         elif event.type == "cancelled":
             cancelled = True
             final_output = event.partial_output
@@ -857,6 +863,18 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                     message_type="image",
                     metadata={"image_urls": urls},
                 )
+                t_in = event.meta.get("tokens_in", 0)
+                t_out = event.meta.get("tokens_out", 0)
+                if (t_in or t_out) and image_provider_id:
+                    img_provider = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
+                    img_prov = img_provider.scalar_one_or_none()
+                    if img_prov:
+                        img_cost = calc_cost(img_prov, tokens_in=t_in, tokens_out=t_out, call_count=len(urls))
+                        await record_billing(db, session_id=session_id, provider_id=img_prov.id,
+                            billing_type=img_prov.billing_type.value, tokens_in=t_in, tokens_out=t_out,
+                            cost=img_cost, currency=img_prov.currency,
+                            detail={"type": "image_gen", "agent": True, "image_count": len(urls)})
+                        cost_total += img_cost
             if event.name == "generate_image" and event.meta and event.meta.get("grid_images"):
                 grid_imgs = event.meta.get("grid_images", [])
                 grid_config = event.meta.get("grid_config", {})
@@ -877,10 +895,18 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                         ).order_by(Message.created_at.desc()).limit(1)
                     )
                     user_msg = msg_result.scalars().first()
-                    user_text = user_msg.content if user_msg else prompt
+                    user_text = user_msg.content if user_msg else data.prompt
                     items = _extract_items_from_text(user_text)
+                    if not items:
+                        import re
+                        count_m = re.search(r'(\d+)\s*[张张个]', user_text)
+                        if count_m:
+                            n = int(count_m.group(1))
+                            items = [{"prompt": f"item {i+1}"} for i in range(n)]
                     event.meta["items"] = items
                 if items:
+                    with open("E:/LamImager/backend/radiate_debug.log", "a", encoding="utf-8") as f:
+                        f.write(f"RADIATE: executing with {len(items)} items\n")
                     result = await _execute_radiate(
                         db, session_id, event.meta, data,
                         task_manager, accumulated_images, steps,
@@ -888,6 +914,9 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
                     )
                     if result:
                         return result
+                else:
+                    with open("E:/LamImager/backend/radiate_debug.log", "a", encoding="utf-8") as f:
+                        f.write("RADIATE: items empty, skipped\n")
         elif event.type == "token":
             final_output += event.content
         elif event.type == "done":
