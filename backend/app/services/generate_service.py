@@ -503,7 +503,8 @@ async def _execute_radiate(
     theme = plan_meta.get("overall_theme", "")
 
     task_manager.update_task(session_id, TaskStatus.GENERATING, message=f"生成风格锚点图 ({cols}x{rows}, 4096x4096)")
-    anchor_prompt = f"A {cols}x{rows} grid layout of {n_items} items in {style_desc} style. {theme}. Each cell clearly separated, consistent unified style throughout the entire grid."
+    item_descriptions = ", ".join([it.get("prompt", f"item{i+1}") for i, it in enumerate(items[:16])])
+    anchor_prompt = f"A {cols}x{rows} grid layout showing: {item_descriptions}. {style_desc} style. {theme}. Each cell clearly separated with clean borders, consistent unified style throughout, no overlapping."
 
     try:
         anchor_sizes = ["4096x4096", "2048x2048", "1024x1024"]
@@ -538,13 +539,11 @@ async def _execute_radiate(
                 message=f"生成子项 {i + 1}/{n_items}: {item_prompt[:30]}")
 
             try:
-                response = await client.generate(
+                response = await client.chat_edit(
                     prompt=f"{item_prompt}. {style_desc} style.",
-                    n=1,
-                    size="1024x1024",
-                    reference_images=[grid_images[i]],
+                    images=[grid_images[i]],
                 )
-                urls = ImageClient.extract_images(response)
+                urls = ImageClient.extract_images_from_chat(response)
                 if urls:
                     accumulated_images.extend(urls)
                     await add_system_message(db, session_id,
@@ -672,13 +671,11 @@ async def _expand_grid_images(
         item_prompt = f"grid cell ({row+1},{col+1}), consistent style with reference"
 
         try:
-            response = await client.generate(
+            response = await client.chat_edit(
                 prompt=item_prompt,
-                n=1,
-                size="1024x1024",
-                reference_images=[ref],
+                images=[ref],
             )
-            urls = ImageClient.extract_images(response)
+            urls = ImageClient.extract_images_from_chat(response)
             if urls:
                 accumulated_images.extend(urls)
                 await add_system_message(db, session_id,
