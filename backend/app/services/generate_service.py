@@ -499,12 +499,24 @@ async def _execute_radiate(
     cols, rows = _compute_grid_config(n_items)
     steps.append({"type": "radiate", "items": n_items, "grid": f"{cols}x{rows}"})
 
-    style_desc = plan_meta.get("style", plan_meta.get("template_name", ""))
+    style_desc = plan_meta.get("style", "")
     theme = plan_meta.get("overall_theme", "")
+    if not style_desc:
+        from app.models.message import Message
+        msg_result = await db.execute(
+            select(Message).where(
+                Message.session_id == session_id,
+                Message.role == "user",
+            ).order_by(Message.created_at.desc()).limit(1)
+        )
+        user_msg = msg_result.scalars().first()
+        user_text = user_msg.content if user_msg else prompt
+        style_desc = _extract_style_from_text(user_text)
+        theme = style_desc
 
+    item_descs = ", ".join([it.get("prompt", "") for it in items[:8]])
     task_manager.update_task(session_id, TaskStatus.GENERATING, message=f"生成风格锚点图 ({cols}x{rows}, 4096x4096)")
-    item_descriptions = ", ".join([it.get("prompt", f"item{i+1}") for i, it in enumerate(items[:16])])
-    anchor_prompt = f"A {cols}x{rows} grid layout showing: {item_descriptions}. {style_desc} style. {theme}. Each cell clearly separated with clean borders, consistent unified style throughout, no overlapping."
+    anchor_prompt = f"A {cols}x{rows} grid showing {item_descs}. {style_desc} style, matching visual theme. Each cell distinctly separated with clear boundaries. Consistent art style across all cells."
 
     try:
         anchor_sizes = ["4096x4096", "2048x2048", "1024x1024"]
@@ -606,6 +618,21 @@ def _extract_items_from_text(text: str) -> list[dict]:
         if kw in text:
             items.append({"prompt": prompt})
     return items
+
+
+def _extract_style_from_text(text: str) -> str:
+    style_map = {
+        "可爱": "cute kawaii chibi", "炫酷": "cool cyberpunk neon",
+        "MC": "Minecraft pixel blocky", "像素": "pixel art retro game",
+        "猫": "cat character", "狗": "dog character",
+        "emoji": "emoji sticker", "表情": "emoji expression sticker",
+        "水墨": "ink wash painting", "水彩": "watercolor painting",
+        "赛博朋克": "cyberpunk neon futuristic",
+    }
+    for kw, style in style_map.items():
+        if kw in text:
+            return style
+    return "digital art illustration"
 
 
 def _compute_grid_config(n: int) -> tuple[int, int]:
