@@ -26,7 +26,7 @@ class PlanTool(Tool):
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "apply", "create", "generate"],
+                "enum": ["list", "apply", "create"],
                 "description": "操作类型：list=列出模板, apply=应用模板, create=保存模板, generate=生成新计划",
             },
             "template_id": {
@@ -80,16 +80,13 @@ class PlanTool(Tool):
         if action == "create":
             return await self._create_template(db, kwargs)
 
-        if action == "generate":
-            return self._generate_plan()
-
         return ToolResult(content=f"未知操作: {action}", meta={"error": "unknown_action"})
 
     async def _list_templates(self, db: AsyncSession) -> ToolResult:
         templates = await list_templates(db)
         if not templates:
             return ToolResult(
-                content="目前没有可用的计划模板。可以使用 action=generate 从零开始创建计划。",
+                content="目前没有可用的计划模板。请先调用 plan(action=\"create\", strategy=\"<合适策略>\", name=\"<名称>\", steps=[{...}]) 新建模板，再调用 plan(action=\"apply\")。策略可选: parallel(并发)、iterative(顺序)、radiate(辐射)。",
                 meta={"templates": []},
             )
         items = []
@@ -166,17 +163,3 @@ class PlanTool(Tool):
             )
         except Exception as e:
             return ToolResult(content=f"创建模板失败: {e}", meta={"error": str(e)})
-
-    def _generate_plan(self) -> ToolResult:
-        return ToolResult(
-            content=(
-                "现在请根据用户需求，用以下格式生成一个生图计划：\n\n"
-                "计划名称：<简短描述>\n"
-                "执行策略：parallel（并发生成）或 iterative（顺序迭代优化）\n\n"
-                "步骤1：\n  - 提示词：<英文生图提示词>\n  - 说明：<这一步要生成什么>\n"
-                "步骤2：\n  - 提示词：<英文生图提示词>\n  - 说明：<这一步要生成什么>\n\n"
-                "输出计划后，按步骤调用 generate_image 工具逐一生成。如果搜索结果提供了有价值的参考，"
-                "在调用 generate_image 时传入合适的 reference_urls。"
-            ),
-            meta={"trigger_generate": True},
-        )
