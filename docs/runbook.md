@@ -72,7 +72,7 @@ Configure in UI at **API 配置** page or via API:
 | `web_search` | 联网搜索 | https://google.serper.dev | For agent search |
 
 ### Settings
-Settings page configures: default providers, image size (W×H), max concurrent tasks, **search retry count** (default 3).
+Settings page configures: default providers, image size (W×H), max concurrent tasks, **search retry count** (default 3), **download directory** (images saved directly to this path when configured, bypassing browser save dialog).
 
 ---
 
@@ -205,3 +205,25 @@ curl http://localhost:8000/api/billing/summary
 ```bash
 curl http://localhost:8000/api/providers
 ```
+
+---
+
+## Security Configuration
+
+### Image Proxy SSRF Protection
+The `/api/images/proxy` endpoint blocks requests to private IPs. If external image URLs fail:
+1. Check if the URL resolves to a private IP (e.g. `127.0.0.1`, `10.x.x.x`, `192.168.x.x`)
+2. Only `http`/`https` schemes are allowed
+3. Response must have `image/*` Content-Type
+
+### Download Path Traversal Protection
+The `/api/download/image` endpoint validates filenames strictly:
+1. Only alphanumeric, CJK characters, dots, and hyphens allowed in filenames
+2. Resolved path must be within the configured download directory
+3. If download fails with 400, check filename for special characters
+
+### API Key Encryption
+1. Keys are encrypted with AES-256-GCM using machine fingerprint
+2. Moving to a new machine requires re-entering all API keys
+3. Decrypt errors are logged but never crash the server
+4. Check `app/utils/crypto.py` for key derivation logic

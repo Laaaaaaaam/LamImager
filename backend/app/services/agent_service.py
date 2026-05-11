@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.api_provider import ApiProvider, ProviderType
 from app.services.billing_service import calc_cost, record_billing
 from app.tools import registry
-from app.utils.crypto import decrypt
+from app.services.api_manager import resolve_provider_vendor
 from app.utils.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -74,13 +74,18 @@ class CancelledEvent(AgentEvent):
     tokens_out: int = 0
 
 
-AGENT_SYSTEM_PROMPT = """你是 LamImager 的 AI 助手，可以帮助用户搜索参考、生成计划、并创建图片。
+AGENT_SYSTEM_PROMPT = """你是 LamImager 的图像生成 Agent。你的核心职责是调用工具生成图片，而非提供建议。
+
+**强制规则**:
+1. 用户要求生成图片时，必须调用工具执行，禁止仅回复文字描述或建议
+2. 信息不足时，优先做出合理假设继续执行；仅当关键信息（如数量、主题）完全缺失时才简短追问一次
+3. 用户可能提供参考图片，标记为 [图N] 格式，你应在生成时基于这些视觉参考
 
 ## 可用工具
 
-- **generate_image**: 生成图片。参数：prompt(英文生图提示词)、count(生成数量，默认1)、reference_urls(参考图URL，可选)。**仅用于生成单张/少量独立图片。**
+- **generate_image**: 生成图片。参数：prompt(英文生图提示词)、count(生成数量1-4，仅用于同一 prompt 的随机变体)、reference_urls(参考图URL，可选)。
 
-- **plan**: 管理和使用生图模板。**当需要生成多张风格统一的套图时，必须先调用 plan**。action=list 列出模板，action=apply 应用模板，action=create 保存新模板。
+- **plan**: 管理和使用生图模板。action=list 列出模板，action=apply 应用模板，action=create 保存新模板。
 
 - **image_search**: 搜索互联网图片作为视觉参考。
 
@@ -88,24 +93,33 @@ AGENT_SYSTEM_PROMPT = """你是 LamImager 的 AI 助手，可以帮助用户搜�
 
 ## Plan 策略
 
-| 策略 | 适用 | 优点 | 缺点 |
-|------|------|------|------|
-| parallel(并发) | 批量初稿/变体探索 | 速度快，可从中挑选 | 各图风格独立，可能不一致 |
-| iterative(顺序) | 单图精修、步骤任务 | 上一步作参考逐步改进 | 串行慢，上一步失败阻塞后续 |
-| radiate(辐射) | 套图、表情包、图标集 | 风格统一，高质量 | 多消耗一次生图，锚点图翻车全毁 |
+| 策略 | 适用场景 |
+|------|---------|
+| parallel(并发) | 批量独立图、变体探索，各图独立生成 |
+| iterative(顺序) | 分步骤任务，按顺序依次执行每个步骤 |
+| radiate(辐射) | 套图/表情包/图标集，先生成风格锚点图再扩展，风格高度统一 |
 
-## 工作规则
+## 工作规则（路径选择）
 
-1. 单张/独立图 → 直接 generate_image(prompt, count=1)
+**直接生成**（generate_image）：
+- 单张图请求
+- 少量独立图（2-4张），彼此无风格关联（如"画3张不同风格的猫"）
+- 若每张图的内容或风格不同，使用多次 generate_image(count=1)，每次给出不同 prompt
+- count 参数仅用于"同一 prompt 的 N 个随机变体"，不用于不同内容的任务
+- 多内容任务（如三视图、多角色、多表情）由服务端自动解析，你必须为每个独立视角/角色/表情生成一张图
+- **禁止**将多个视角合并为一张 sheet/turnaround，除非用户明确要求"一张图里排版"或"设定表"
 
-2. 多张/套图 → plan 模板优先级:
-   L1: 模板参数完全匹配 → 直接改变量 → plan(action="apply")
-   L2: 模板类似但不够 → 微调参数产生变体 → plan(action="apply")  
-   L3: 无适配模板 → 选择合适策略 → plan(action="create") 新建 → plan(action="apply")
+**计划生成**（必须走 plan）：
+- 风格统一的多图：套图、表情包、图标集、系列插画
+- 有先后依赖的任务：先草图再精修、先Logo再延伸物料
+- 关键词识别：套/组/系列/一套/表情包/图标集/统一风格
+- 流程：plan(action="list") → 找到合适模板则 plan(action="apply")，否则 plan(action="create") → plan(action="apply")
+- 对于 radiate/套图模板，apply 时必须提供 variables={items:[{"prompt":"..."}, ...], style:"...", overall_theme:"..."}
+- apply 成功后必须继续执行：根据返回的 steps，逐步调用 generate_image 完成每一步，禁止仅回复"已生成N个步骤"而不实际生图
 
-3. 搜索可选用，不阻塞流程
-
-请用中文回复用户。"""
+**搜索辅助**（可选，不阻塞主流程）：
+- 用户提到"参考/搜索/流行/趋势"时先搜索再生成
+- image_search 结果可作为 generate_image 的 reference_urls"""
 
 
 def _parse_fn_args(raw_args) -> dict:
@@ -117,6 +131,37 @@ def _parse_fn_args(raw_args) -> dict:
     if isinstance(raw_args, dict):
         return raw_args
     return {}
+
+
+def _truncate_tool_result(content: str, tool_name: str, max_chars: int = 800) -> str:
+    if len(content) <= max_chars:
+        return content
+    suffix = "\n... [truncated]"
+    if tool_name == "web_search":
+        items = content.split("\n\n")
+        if len(items) > 3:
+            head = "\n\n".join(items[:3])
+            tail = f"\n\n... 其余 {len(items) - 3} 条结果已省略"
+            combined = head + tail
+            if len(combined) > max_chars:
+                return combined[:max_chars - len(suffix)] + suffix
+            return combined
+    if len(content) > max_chars:
+        return content[:max_chars - len(suffix)] + suffix
+    return content
+
+
+def _estimate_tokens(msgs: list[dict]) -> int:
+    total = 0
+    for m in msgs:
+        s = m.get("content", "") or ""
+        if isinstance(s, list):
+            for part in s:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    total += len(part.get("text", ""))
+        else:
+            total += len(s)
+    return total // 3
 
 
 async def _record_partial_billing(db, session_id, provider, tokens_in, tokens_out, rounds, tools):
@@ -146,6 +191,7 @@ async def run_agent_loop(
     max_rounds: int = 5,
     checkpoints: list[str] | None = None,
     cancel_event: asyncio.Event | None = None,
+    on_checkpoint: Callable[[str, dict], asyncio.Future] | None = None,
 ) -> AsyncGenerator[AgentEvent, None]:
     checkpoints = checkpoints or []
 
@@ -158,12 +204,12 @@ async def run_agent_loop(
         return
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception as e:
         yield ErrorEvent(error=f"API key decryption failed: {e}")
         return
 
-    client = LLMClient(provider.base_url, api_key, provider.model_id)
+    client = LLMClient(base_url, api_key, provider.model_id)
     tool_schemas = registry.list_for_openai(tools)
 
     tool_provider_result = await db.execute(
@@ -176,7 +222,7 @@ async def run_agent_loop(
     tool_api_key = ""
     if tool_provider:
         try:
-            tool_api_key = decrypt(tool_provider.api_key_enc)
+            _, tool_api_key = await resolve_provider_vendor(db, tool_provider)
         except Exception as e:
             logger.warning(f"Tool api key decryption failed: {e}")
 
@@ -196,63 +242,94 @@ async def run_agent_loop(
         )
     )
     image_provider = image_provider_result.scalars().first()
-    image_api_key = ""
-    image_base_url = ""
-    image_model_id = ""
-    if image_provider:
-        try:
-            image_api_key = decrypt(image_provider.api_key_enc)
-            image_base_url = image_provider.base_url
-            image_model_id = image_provider.model_id
-        except Exception as e:
-            logger.warning(f"Image api key decryption failed: {e}")
+
+    image_size = "1024x1024"
+    try:
+        from app.services.settings_service import get_setting
+        setting = await get_setting(db, "default_image_size")
+        if setting and isinstance(setting, dict):
+            image_size = str(setting.get("value", "1024x1024"))
+    except Exception:
+        pass
 
     total_tokens_in = 0
     total_tokens_out = 0
     working_messages = list(messages)
     partial_output = ""
 
+    MAX_WORKING_TOKENS = 6000
+
+    round_idx = -1
     for round_idx in range(max_rounds):
         if cancel_event and cancel_event.is_set():
             await _record_partial_billing(db, session_id, provider, total_tokens_in, total_tokens_out, round_idx, tools)
             yield CancelledEvent(partial_output=partial_output, tokens_in=total_tokens_in, tokens_out=total_tokens_out)
             return
 
+        if _estimate_tokens(working_messages) > MAX_WORKING_TOKENS:
+            system_msg = working_messages[0]
+            recent = working_messages[-8:]
+            kept = [system_msg]
+            for msg in working_messages[1:-8]:
+                if msg.get("tool_call_id") or msg.get("role") == "tool":
+                    continue
+            for msg in recent:
+                if msg.get("role") == "tool":
+                    tool_call_id = msg.get("tool_call_id")
+                    if tool_call_id:
+                        has_call = any(
+                            m.get("role") == "assistant" and
+                            any(tc.get("id") == tool_call_id for tc in (m.get("tool_calls") or []))
+                            for m in kept + recent
+                        )
+                        if not has_call:
+                            continue
+                kept.append(msg)
+            working_messages = kept
+            logger.info(f"Agent working_messages capped: {_estimate_tokens(working_messages)} tokens after truncation")
+
+        round_content = ""
+        round_tool_calls: list[dict] = []
+
         try:
-            response = await client.chat(
+            forced = "required" if round_idx <= 1 else "auto"
+            async for event in client.chat_stream_with_tools(
                 messages=working_messages,
-                temperature=0.7,
                 tools=tool_schemas,
-            )
+                temperature=0.7,
+                tool_choice=forced,
+            ):
+                if cancel_event and cancel_event.is_set():
+                    await _record_partial_billing(db, session_id, provider, total_tokens_in, total_tokens_out, round_idx + 1, tools)
+                    yield CancelledEvent(partial_output=partial_output, tokens_in=total_tokens_in, tokens_out=total_tokens_out)
+                    return
+
+                ev_type = event.get("type", "")
+                if ev_type == "token":
+                    round_content += event["content"]
+                    partial_output += event["content"]
+                    yield TokenEvent(content=event["content"])
+                elif ev_type == "usage":
+                    total_tokens_in += event.get("tokens_in", 0)
+                    total_tokens_out += event.get("tokens_out", 0)
+                elif ev_type == "tool_calls":
+                    round_tool_calls = event["tool_calls"]
         except Exception as e:
-            logger.error(f"Agent LLM call failed round {round_idx}: {e}")
+            logger.error(f"Agent LLM streaming failed round {round_idx}: {e}")
             yield ErrorEvent(error=str(e))
             return
 
-        usage = response.get("usage", {})
-        round_tokens_in = usage.get("prompt_tokens", 0)
-        round_tokens_out = usage.get("completion_tokens", 0)
-        total_tokens_in += round_tokens_in
-        total_tokens_out += round_tokens_out
-
-        content = LLMClient.extract_content(response)
-        tool_calls = LLMClient.extract_tool_calls(response)
-
-        if content:
-            partial_output += content
-            yield TokenEvent(content=content)
-
-        if not tool_calls:
+        if not round_tool_calls:
             break
 
         assistant_msg: dict = {
             "role": "assistant",
-            "content": content or None,
-            "tool_calls": tool_calls,
+            "content": round_content or None,
+            "tool_calls": round_tool_calls,
         }
         working_messages.append(assistant_msg)
 
-        for tc in tool_calls:
+        for tc in round_tool_calls:
             fn = tc.get("function", {})
             fn_name = fn.get("name", "")
             fn_args = _parse_fn_args(fn.get("arguments", {}))
@@ -260,8 +337,17 @@ async def run_agent_loop(
             yield ToolCallEvent(name=fn_name, args=fn_args)
 
             if fn_name in checkpoints:
-                yield ErrorEvent(error=f"Checkpoint '{fn_name}' requires user approval (not yet implemented)")
-                break
+                if on_checkpoint:
+                    try:
+                        approved = await on_checkpoint(fn_name, fn_args)
+                        if not approved:
+                            await _record_partial_billing(db, session_id, provider, total_tokens_in, total_tokens_out, round_idx + 1, tools)
+                            yield CancelledEvent(partial_output=partial_output, tokens_in=total_tokens_in, tokens_out=total_tokens_out)
+                            return
+                    except Exception as e:
+                        logger.warning(f"Checkpoint callback failed: {e}")
+                else:
+                    yield WarningEvent(name=fn_name, reason=f"Checkpoint '{fn_name}' not configured", retry_count=0)
 
             if cancel_event and cancel_event.is_set():
                 await _record_partial_billing(db, session_id, provider, total_tokens_in, total_tokens_out, round_idx + 1, tools)
@@ -278,9 +364,27 @@ async def run_agent_loop(
                     exec_kwargs["db"] = db
                     exec_kwargs["api_key"] = tool_api_key
                     exec_kwargs["retry_count"] = search_retry_count
-                    exec_kwargs["image_api_key"] = image_api_key
-                    exec_kwargs["image_base_url"] = image_base_url
-                    exec_kwargs["image_model_id"] = image_model_id
+                    exec_kwargs["image_provider_id"] = image_provider.id if image_provider else ""
+                    exec_kwargs["image_size"] = image_size
+                    exec_kwargs["session_id"] = session_id
+
+                    # Auto-inject context references for generate_image
+                    if fn_name == "generate_image" and not exec_kwargs.get("reference_urls"):
+                        try:
+                            from app.services.agent_intent_service import resolve_context_references
+                            refs = await resolve_context_references(
+                                db=db,
+                                session_id=session_id,
+                                prompt="",
+                                context_messages=[],
+                                reference_labels=[],
+                            )
+                            if refs:
+                                exec_kwargs["reference_urls"] = refs[:4]
+                                logger.debug(f"Injected {len(refs[:4])} context references into generate_image")
+                        except Exception as e:
+                            logger.debug(f"Could not resolve context references: {e}")
+
                     tool_result = await tool.execute(**exec_kwargs)
                     result_content = tool_result.content
                     result_meta = tool_result.meta
@@ -307,12 +411,13 @@ async def run_agent_loop(
                     result_content = f"工具 {fn_name} 执行失败: {e}"
                     result_meta = {"error": str(e)}
 
-            yield ToolResultEvent(name=fn_name, content=result_content, meta=result_meta)
+            truncated = _truncate_tool_result(result_content, fn_name)
+            yield ToolResultEvent(name=fn_name, content=truncated, meta=result_meta)
 
             tool_msg = {
                 "role": "tool",
                 "tool_call_id": tc.get("id", ""),
-                "content": result_content,
+                "content": truncated,
             }
             working_messages.append(tool_msg)
 

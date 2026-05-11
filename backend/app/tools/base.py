@@ -14,6 +14,7 @@ class Tool(ABC):
     name: str = ""
     description: str = ""
     parameters: dict = {}
+    checkpoint: bool = False
 
     @abstractmethod
     async def execute(self, **kwargs) -> ToolResult:

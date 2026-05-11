@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.api_provider import ApiProvider
 from app.services.billing_service import record_billing, calc_cost
 from app.schemas.prompt import PromptOptimizeRequest, PromptOptimizeResponse
-from app.utils.crypto import decrypt
+from app.services.api_manager import resolve_provider_vendor
 from app.utils.llm_client import LLMClient
 
 
@@ -27,12 +27,12 @@ async def stream_llm_chat(
         return
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception as e:
         yield f"data: {json.dumps({'error': f'API key decryption failed: {e}'})}\n\n"
         return
 
-    client = LLMClient(provider.base_url, api_key, provider.model_id)
+    client = LLMClient(base_url, api_key, provider.model_id)
 
     full_response = []
     usage_from_api = None
@@ -103,6 +103,15 @@ Original prompt: {prompt}
 Provide ONLY the refined prompt, no explanations.""",
 }
 
+# Focus descriptions for multi-direction merging (no repeated prompt/footer)
+OPTIMIZATION_FOCUSES = {
+    "detail_enhancement": "Add more specific visual details, textures, lighting conditions, and atmospheric elements. Keep the original intent but make it more vivid and descriptive.",
+    "style_unification": "Ensure consistent artistic style, color harmony, and visual coherence. Make the style description clear and unified.",
+    "composition_optimization": "Improve composition, framing, focal point, and visual balance. Add composition-specific keywords and spatial descriptions.",
+    "color_adjustment": "Achieve superior color harmony, mood-appropriate palettes, and atmospheric color grading. Consider complementary colors, color temperature, and saturation balance.",
+    "lighting_enhancement": "Add sophisticated lighting descriptions: light sources, direction, shadow casting, volumetric lighting, rim lighting, and light color temperature.",
+}
+
 CUSTOM_OPTIMIZATION_PROMPT = """You are a prompt optimization assistant. Optimize the given image generation prompt following the user's custom instruction carefully.
 
 Custom instruction: {instruction}
@@ -138,17 +147,17 @@ def build_optimization_prompt(direction_str: str, prompt: str) -> str:
     if not known and has_custom:
         return CUSTOM_OPTIMIZATION_PROMPT.format(instruction=custom_instruction, prompt=prompt)
 
-    parts = []
+    focuses = []
     for d in known:
-        parts.append(OPTIMIZATION_PROMPTS[d].format(prompt=prompt))
+        focuses.append(f"- {OPTIMIZATION_FOCUSES[d]}")
     if has_custom and custom_instruction:
-        parts.append(CUSTOM_OPTIMIZATION_PROMPT.format(instruction=custom_instruction, prompt=prompt))
+        focuses.append(f"- Custom instruction: {custom_instruction}")
 
     return (
         "You are an expert image generation prompt engineer. "
-        "Apply ALL of the following optimization focuses simultaneously. "
-        "Balance and integrate them into a cohesive, enhanced prompt.\n\n"
-        + "\n\n".join(parts)
+        "Optimize the following prompt by simultaneously applying ALL of these focuses:\n"
+        + "\n".join(focuses)
+        + f"\n\nOriginal prompt: {prompt}"
         + "\n\nProvide ONLY the refined prompt, no explanations."
     )
 
@@ -164,11 +173,11 @@ async def optimize_prompt(
     direction = data.direction
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception as e:
         raise ValueError(f"LLM API key decryption failed: {e}") from e
 
-    client = LLMClient(provider.base_url, api_key, provider.model_id)
+    client = LLMClient(base_url, api_key, provider.model_id)
 
     system_prompt = build_optimization_prompt(direction, data.prompt)
 
@@ -222,12 +231,12 @@ async def optimize_prompt_stream(
         return
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception as e:
         yield f"data: {json.dumps({'error': f'API key decryption failed: {e}'})}\n\n"
         return
 
-    client = LLMClient(provider.base_url, api_key, provider.model_id)
+    client = LLMClient(base_url, api_key, provider.model_id)
 
     system_prompt = build_optimization_prompt(data.direction, data.prompt)
 

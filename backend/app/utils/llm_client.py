@@ -5,6 +5,15 @@ import json
 
 import aiohttp
 
+_shared_session: aiohttp.ClientSession | None = None
+
+
+async def get_shared_session() -> aiohttp.ClientSession:
+    global _shared_session
+    if _shared_session is None or _shared_session.closed:
+        _shared_session = aiohttp.ClientSession()
+    return _shared_session
+
 
 class LLMError(Exception):
     pass
@@ -49,15 +58,15 @@ class LLMClient:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=600)
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        raise LLMResponseError(f"LLM API error {resp.status}: {text}")
-                    data = await resp.json()
-                    return data
+            session = await get_shared_session()
+            async with session.post(
+                url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=600)
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise LLMResponseError(f"LLM API error {resp.status}: {text}")
+                data = await resp.json()
+                return data
         except aiohttp.ClientError as e:
             raise LLMConnectionError(f"Connection error: {e}") from e
 
@@ -77,8 +86,8 @@ class LLMClient:
             "stream_options": {"include_usage": True},
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
+            session = await get_shared_session()
+            async with session.post(
                     url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=600)
                 ) as resp:
                     if resp.status != 200:
@@ -116,6 +125,7 @@ class LLMClient:
         tools: list[dict],
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tool_choice: str = "auto",
     ) -> AsyncGenerator[dict, None]:
         url = f"{self.base_url}/v1/chat/completions"
         payload = {
@@ -126,77 +136,77 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
             "tools": tools,
-            "tool_choice": "auto",
+            "tool_choice": tool_choice,
         }
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=600)
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        raise LLMResponseError(f"LLM API error {resp.status}: {text}")
-                    accumulated_tool_calls: dict[int, dict] = {}
-                    async for line in resp.content:
-                        line = line.decode("utf-8").strip()
-                        if line.startswith("data: "):
-                            data_str = line[6:]
-                            if data_str == "[DONE]":
-                                break
-                            try:
-                                chunk = json.loads(data_str)
-                                choices = chunk.get("choices") or [{}]
-                                delta = choices[0].get("delta", {}) if choices else {}
-                                finish_reason = choices[0].get("finish_reason", "")
-                                content = delta.get("content") or ""
-                                tool_calls_delta = delta.get("tool_calls") or []
-                                usage = chunk.get("usage")
+            session = await get_shared_session()
+            async with session.post(
+                url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=600)
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise LLMResponseError(f"LLM API error {resp.status}: {text}")
+                accumulated_tool_calls: dict[int, dict] = {}
+                async for line in resp.content:
+                    line = line.decode("utf-8").strip()
+                    if line.startswith("data: "):
+                        data_str = line[6:]
+                        if data_str == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data_str)
+                            choices = chunk.get("choices") or [{}]
+                            delta = choices[0].get("delta", {}) if choices else {}
+                            finish_reason = choices[0].get("finish_reason", "")
+                            content = delta.get("content") or ""
+                            tool_calls_delta = delta.get("tool_calls") or []
+                            usage = chunk.get("usage")
 
-                                if content:
-                                    yield {"type": "token", "content": content}
+                            if content:
+                                yield {"type": "token", "content": content}
 
-                                if tool_calls_delta:
-                                    for tc_delta in tool_calls_delta:
-                                        idx = tc_delta.get("index", 0)
-                                        if idx not in accumulated_tool_calls:
-                                            accumulated_tool_calls[idx] = {
-                                                "id": tc_delta.get("id") or "",
-                                                "function": {"name": "", "arguments": ""},
-                                            }
-                                        if tc_delta.get("id"):
-                                            accumulated_tool_calls[idx]["id"] = tc_delta["id"]
-                                        fn = tc_delta.get("function", {})
-                                        if fn.get("name"):
-                                            accumulated_tool_calls[idx]["function"]["name"] += fn["name"]
-                                        if fn.get("arguments"):
-                                            accumulated_tool_calls[idx]["function"]["arguments"] += fn["arguments"]
+                            if tool_calls_delta:
+                                for tc_delta in tool_calls_delta:
+                                    idx = tc_delta.get("index", 0)
+                                    if idx not in accumulated_tool_calls:
+                                        accumulated_tool_calls[idx] = {
+                                            "id": tc_delta.get("id") or "",
+                                            "function": {"name": "", "arguments": ""},
+                                        }
+                                    if tc_delta.get("id"):
+                                        accumulated_tool_calls[idx]["id"] = tc_delta["id"]
+                                    fn = tc_delta.get("function", {})
+                                    if fn.get("name"):
+                                        accumulated_tool_calls[idx]["function"]["name"] += fn["name"]
+                                    if fn.get("arguments"):
+                                        accumulated_tool_calls[idx]["function"]["arguments"] += fn["arguments"]
 
-                                if usage:
-                                    yield {
-                                        "type": "usage",
-                                        "tokens_in": usage.get("prompt_tokens", 0),
-                                        "tokens_out": usage.get("completion_tokens", 0),
-                                    }
+                            if usage:
+                                yield {
+                                    "type": "usage",
+                                    "tokens_in": usage.get("prompt_tokens", 0),
+                                    "tokens_out": usage.get("completion_tokens", 0),
+                                }
 
-                                if finish_reason == "tool_calls" and accumulated_tool_calls:
-                                    resolved = []
-                                    for tc in sorted(accumulated_tool_calls.values(), key=lambda x: x.get("id", "")):
-                                        args_str = tc["function"]["arguments"]
-                                        try:
-                                            args = json.loads(args_str) if args_str else {}
-                                        except json.JSONDecodeError:
-                                            args = {}
-                                        resolved.append({
-                                            "id": tc["id"],
-                                            "function": {
-                                                "name": tc["function"]["name"],
-                                                "arguments": args,
-                                            },
-                                        })
-                                    yield {"type": "tool_calls", "tool_calls": resolved}
+                            if finish_reason == "tool_calls" and accumulated_tool_calls:
+                                resolved = []
+                                for tc in sorted(accumulated_tool_calls.values(), key=lambda x: x.get("id", "")):
+                                    args_str = tc["function"]["arguments"]
+                                    try:
+                                        args = json.loads(args_str) if args_str else {}
+                                    except json.JSONDecodeError:
+                                        args = {}
+                                    resolved.append({
+                                        "id": tc["id"],
+                                        "function": {
+                                            "name": tc["function"]["name"],
+                                            "arguments": args_str,
+                                        },
+                                    })
+                                yield {"type": "tool_calls", "tool_calls": resolved}
 
-                            except json.JSONDecodeError:
-                                continue
+                        except json.JSONDecodeError:
+                            continue
         except aiohttp.ClientError as e:
             raise LLMConnectionError(f"Connection error: {e}") from e
 

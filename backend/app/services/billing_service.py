@@ -13,10 +13,10 @@ from app.schemas.billing import BillingDetailQuery, BillingRecordResponse, Billi
 def calc_cost(provider, tokens_in: int = 0, tokens_out: int = 0, call_count: int = 1) -> float:
     total_tokens = tokens_in + tokens_out
     unit_price = float(provider.unit_price or 0)
-    if provider.billing_type.value == "per_token" and total_tokens > 0:
-        return unit_price * total_tokens / 1000
-    elif provider.billing_type.value == "per_token":
-        return unit_price * call_count
+    if provider.billing_type.value == "per_token":
+        if total_tokens > 0:
+            return unit_price * total_tokens / 1000
+        return 0.0
     elif provider.billing_type.value == "per_call":
         return unit_price * call_count
     return 0.0

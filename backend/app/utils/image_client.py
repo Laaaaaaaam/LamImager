@@ -1,7 +1,10 @@
 from __future__ import annotations
+import base64
 import re
 
 import aiohttp
+
+from app.utils.llm_client import get_shared_session
 
 
 class ImageGenError(Exception):
@@ -55,15 +58,15 @@ class ImageClient:
         payload.update(kwargs)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=300)
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        raise ImageGenResponseError(f"Image API error {resp.status}: {text}")
-                    data = await resp.json()
-                    return data
+            session = await get_shared_session()
+            async with session.post(
+                url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=300)
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ImageGenResponseError(f"Image API error {resp.status}: {text}")
+                data = await resp.json()
+                return data
         except aiohttp.ClientError as e:
             raise ImageGenConnectionError(f"Connection error: {e}") from e
 
@@ -111,25 +114,25 @@ class ImageClient:
 
         import logging as _log
         _l = _log.getLogger(__name__)
-        _l.info(f"chat_edit request: base_url={self.base_url}, model={self.model_id}")
-        _l.info(f"chat_edit images count: {len(images)}")
+        _l.debug(f"chat_edit request: base_url={self.base_url}, model={self.model_id}")
+        _l.debug(f"chat_edit images count: {len(images)}")
         for i, img in enumerate(images):
-            _l.info(f"chat_edit image[{i}]: prefix={img[:60]}... length={len(img)}")
+            _l.debug(f"chat_edit image[{i}]: prefix={img[:60]}... length={len(img)}")
         payload_log = dict(payload)
-        _l.info(f"chat_edit payload keys: {list(payload_log.keys())}")
+        _l.debug(f"chat_edit payload keys: {list(payload_log.keys())}")
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=300)
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        raise ImageGenNotSupportedError(f"Chat API error {resp.status}: {text[:500]}")
-                    data = await resp.json()
-                    import logging
-                    logging.getLogger(__name__).info(f"chat_edit response keys: {list(data.keys())}")
-                    return data
+            session = await get_shared_session()
+            async with session.post(
+                url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=300)
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ImageGenNotSupportedError(f"Chat API error {resp.status}: {text[:500]}")
+                data = await resp.json()
+                import logging
+                logging.getLogger(__name__).debug(f"chat_edit response keys: {list(data.keys())}")
+                return data
         except aiohttp.ClientError as e:
             raise ImageGenConnectionError(f"Connection error: {e}") from e
 
@@ -155,15 +158,15 @@ class ImageClient:
         payload.update(kwargs)
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=300)
-                ) as resp:
-                    if resp.status != 200:
-                        text = await resp.text()
-                        raise ImageGenResponseError(f"Image API error {resp.status}: {text}")
-                    data = await resp.json()
-                    return data
+            session = await get_shared_session()
+            async with session.post(
+                url, json=payload, headers=self._headers(), timeout=aiohttp.ClientTimeout(total=300)
+            ) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise ImageGenResponseError(f"Image API error {resp.status}: {text}")
+                data = await resp.json()
+                return data
         except aiohttp.ClientError as e:
             raise ImageGenConnectionError(f"Connection error: {e}") from e
 
@@ -224,3 +227,19 @@ class ImageClient:
                     if url:
                         images.append(url)
         return images
+
+    @staticmethod
+    async def urls_to_base64(urls: list[str]) -> list[str]:
+        result = []
+        session = await get_shared_session()
+        for url in urls[:6]:
+            try:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        mimetype = resp.content_type or "image/png"
+                        b64 = base64.b64encode(data).decode("utf-8")
+                        result.append(f"data:{mimetype};base64,{b64}")
+            except Exception:
+                continue
+        return result

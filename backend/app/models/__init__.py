@@ -1,4 +1,4 @@
-from app.models.api_provider import ApiProvider, ProviderType, BillingType
+from app.models.api_provider import ApiVendor, ApiProvider, ProviderType, BillingType
 from app.models.skill import Skill
 from app.models.rule import Rule, RuleType
 from app.models.billing import BillingRecord, BillingRecordType
@@ -8,7 +8,7 @@ from app.models.message import Message, MessageRole, MessageType
 from app.models.app_setting import AppSetting
 
 __all__ = [
-    "ApiProvider", "ProviderType", "BillingType",
+    "ApiVendor", "ApiProvider", "ProviderType", "BillingType",
     "Skill",
     "Rule", "RuleType",
     "BillingRecord", "BillingRecordType",

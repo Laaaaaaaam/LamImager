@@ -33,6 +33,10 @@
           <Layers :size="18" />
           <span v-if="!sidebarCollapsed">规划模板</span>
         </router-link>
+        <router-link to="/dashboard" class="nav-item" active-class="nav-item--active">
+          <BarChart3 :size="18" />
+          <span v-if="!sidebarCollapsed">仪表盘</span>
+        </router-link>
         <router-link to="/settings" class="nav-item" active-class="nav-item--active">
           <SettingsIcon :size="18" />
           <span v-if="!sidebarCollapsed">设置</span>
@@ -47,7 +51,9 @@
         </div>
       </header>
       <main class="content" :class="{ 'no-padding': route.name === 'sessions' }">
-        <router-view />
+        <ErrorBoundary>
+          <router-view />
+        </ErrorBoundary>
       </main>
     </div>
 
@@ -122,7 +128,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import ErrorBoundary from './components/ErrorBoundary.vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { useBillingStore } from './stores/billing'
@@ -140,6 +147,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Layers,
+  BarChart3,
 } from 'lucide-vue-next'
 
 const route = useRoute()
@@ -164,13 +172,6 @@ const currentPageTitle = computed(() => pageTitles[route.name as string] || 'Lam
 onMounted(async () => {
   billingStore.fetchSummary()
 
-  ;(window as any).toggleAssistant = () => {
-    router.push('/')
-  }
-  ;(window as any).navigateTo = (path: string) => {
-    router.push(path)
-  }
-
   try {
     const { data } = await settingsApi.getMigrationStatus()
     if (data.can_migrate && await dialog.showConfirm(
@@ -181,11 +182,6 @@ onMounted(async () => {
       dialog.showAlert(res.data.message)
     }
   } catch { /* ignore */ }
-})
-
-onUnmounted(() => {
-  delete (window as any).toggleAssistant
-  delete (window as any).navigateTo
 })
 
 watch(showBilling, async (show) => {

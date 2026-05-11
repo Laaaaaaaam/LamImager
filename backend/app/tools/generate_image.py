@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import base64
 import io
 import logging
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 class GenerateImageTool(Tool):
     name = "generate_image"
+    checkpoint = True
     description = (
         "调用图像生成API生成图片。可用于根据提示词生成单张或批量图片。"
         "可传入从 image_search 结果中选取的参考图URL列表 (reference_urls)，"
@@ -47,112 +47,101 @@ class GenerateImageTool(Tool):
         prompt: str = "",
         count: int = 1,
         reference_urls: list[str] | None = None,
+        reference_images: list[str] | None = None,
+        reference_labels: list[dict] | None = None,
         grid_config: dict | None = None,
         **kwargs,
     ) -> ToolResult:
-        api_key = kwargs.get("image_api_key", "")
-        base_url = kwargs.get("image_base_url", "")
-        model_id = kwargs.get("image_model_id", "")
-        image_size = kwargs.get("image_size", "1024x1024")
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from app.services.generate_service import generate_images_core
 
-        if not api_key or not base_url:
+        db: AsyncSession | None = kwargs.get("db")
+        image_provider_id = kwargs.get("image_provider_id", "")
+        image_size = kwargs.get("image_size", "1024x1024")
+        session_id = kwargs.get("session_id", "")
+
+        if not db:
+            return ToolResult(
+                content="生成失败：缺少数据库会话",
+                meta={"error": "no_db_session"},
+            )
+        if not image_provider_id:
             return ToolResult(
                 content="生成失败：未配置图像生成API，请在设置中配置默认图像提供商",
                 meta={"error": "missing_image_provider"},
             )
 
-        client = ImageClient(base_url, api_key, model_id)
         count = max(1, min(count, 4))
 
+        logger.info(f"generate_image tool: reference_urls={'provided' if reference_urls else 'empty'}, reference_images={'provided' if reference_images else 'empty'}, count={count}")
+
         if grid_config:
-            return await _generate_grid(prompt, client, grid_config, image_size, reference_urls)
+            return await _generate_grid(db, image_provider_id, prompt, grid_config, image_size, reference_urls, session_id=session_id)
 
-        reference_base64: list[str] = []
+        reference_base64: list[str] = list(reference_images or [])
         if reference_urls:
-            reference_base64 = await _urls_to_base64(reference_urls)
+            url_b64 = await ImageClient.urls_to_base64(reference_urls)
+            reference_base64.extend(url_b64)
 
-        async def generate_one(idx):
-            try:
-                if reference_base64:
-                    response = await client.chat_edit(
-                        prompt=prompt,
-                        images=reference_base64,
-                    )
-                    return ImageClient.extract_images_from_chat(response)
-                else:
-                    response = await client.generate(
-                        prompt=prompt,
-                        n=1,
-                        size=image_size,
-                    )
-                    return ImageClient.extract_images(response)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Image generation #{idx} failed: {e}")
-                return []
+        try:
+            urls, tokens_in, tokens_out = await generate_images_core(
+                db=db,
+                provider_id=image_provider_id,
+                prompt=prompt,
+                image_count=count,
+                image_size=image_size,
+                reference_images=reference_base64 if reference_base64 else None,
+                reference_labels=reference_labels or None,
+                session_id=session_id,
+            )
+        except Exception as e:
+            logger.error(f"generate_image tool failed: {e}")
+            return ToolResult(
+                content=f"生成失败: {e}",
+                meta={"error": str(e)},
+            )
 
-        semaphore = asyncio.Semaphore(5)
-        async def sem_generate(idx):
-            async with semaphore:
-                return await generate_one(idx)
-
-        tasks = [sem_generate(i) for i in range(count)]
-        results = await asyncio.gather(*tasks)
-
-        all_urls = []
-        for urls in results:
-            all_urls.extend(urls)
-
-        if not all_urls:
+        if not urls:
             return ToolResult(
                 content="生成失败：生图API未返回任何图片",
                 meta={"error": "no_images"},
             )
 
         return ToolResult(
-            content=f"已生成 {len(all_urls)} 张图片",
-            meta={"image_urls": all_urls, "prompt": prompt, "count": count},
+            content=f"已生成 {len(urls)} 张图片",
+            meta={"image_urls": urls, "prompt": prompt, "count": count,
+                  "tokens_in": tokens_in, "tokens_out": tokens_out},
         )
 
 
-async def _urls_to_base64(urls: list[str]) -> list[str]:
-    result = []
-    async with aiohttp.ClientSession() as session:
-        for url in urls[:6]:
-            try:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                    if resp.status == 200:
-                        data = await resp.read()
-                        mimetype = resp.content_type or "image/png"
-                        b64 = base64.b64encode(data).decode("utf-8")
-                        result.append(f"data:{mimetype};base64,{b64}")
-            except Exception:
-                continue
-    return result
-
-
 async def _generate_grid(
+    db,
+    image_provider_id: str,
     prompt: str,
-    client,
     grid_config: dict,
     image_size: str,
     reference_urls: list[str] | None,
+    session_id: str = "",
 ) -> ToolResult:
     cols = grid_config.get("cols", 2)
     rows = grid_config.get("rows", 2)
     grid_prompt = f"{prompt}. Split into {cols}x{rows} equal grid cells, each cell distinct, clean borders."
 
-    reference_base64 = []
+    reference_base64: list[str] = []
     if reference_urls:
-        reference_base64 = await _urls_to_base64(reference_urls)
+        reference_base64 = await ImageClient.urls_to_base64(reference_urls)
 
     try:
-        if reference_base64:
-            response = await client.chat_edit(prompt=grid_prompt, images=reference_base64)
-            urls = ImageClient.extract_images_from_chat(response)
-        else:
-            response = await client.generate(prompt=grid_prompt, n=1, size=image_size)
-            urls = ImageClient.extract_images(response)
+        from app.services.generate_service import generate_images_core
+        urls, tokens_in, tokens_out = await generate_images_core(
+            db=db,
+            provider_id=image_provider_id,
+            prompt=grid_prompt,
+            image_count=1,
+            image_size=image_size,
+            reference_images=reference_base64 if reference_base64 else None,
+            session_id=session_id,
+        )
 
         if not urls:
             return ToolResult(content="网格图生成失败：API未返回图片", meta={"error": "no_grid_image"})
@@ -193,6 +182,8 @@ async def _generate_grid(
                 "image_urls": [grid_url],
                 "grid_images": grid_images,
                 "grid_config": {"cols": cols, "rows": rows},
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
             },
         )
     except Exception as e:

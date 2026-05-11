@@ -4,7 +4,7 @@ import type { DefaultModelsConfig } from '../types'
 export interface MigrationStatus {
   can_migrate: boolean
   app_empty: boolean
-  web_has_data: boolean
+  legacy_has_data: boolean
   source_dir: string | null
   target_dir: string
 }

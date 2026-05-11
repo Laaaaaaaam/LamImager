@@ -142,6 +142,11 @@ select:focus {
   font-weight: 500;
 }
 
+.form-group label .required-mark {
+  color: #d00;
+  margin-left: 2px;
+}
+
 .drawer-overlay {
   position: fixed;
   top: 0;

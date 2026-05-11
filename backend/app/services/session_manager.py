@@ -57,6 +57,51 @@ async def get_session(db: AsyncSession, session_id: str) -> Session | None:
     return result.scalar_one_or_none()
 
 
+async def get_session_detail(db: AsyncSession, session_id: str) -> dict | None:
+    msg_subq = (
+        select(
+            Message.session_id,
+            func.count(Message.id).label("message_count"),
+        )
+        .group_by(Message.session_id)
+        .subquery()
+    )
+    billing_subq = (
+        select(
+            BillingRecord.session_id,
+            func.coalesce(func.sum(BillingRecord.cost), 0).label("cost"),
+            func.coalesce(func.sum(BillingRecord.tokens_in + BillingRecord.tokens_out), 0).label("tokens"),
+        )
+        .group_by(BillingRecord.session_id)
+        .subquery()
+    )
+    result = await db.execute(
+        select(
+            Session,
+            func.coalesce(msg_subq.c.message_count, 0).label("message_count"),
+            func.coalesce(billing_subq.c.cost, 0).label("cost"),
+            func.coalesce(billing_subq.c.tokens, 0).label("tokens"),
+        )
+        .outerjoin(msg_subq, msg_subq.c.session_id == Session.id)
+        .outerjoin(billing_subq, billing_subq.c.session_id == Session.id)
+        .where(Session.id == session_id)
+    )
+    row = result.first()
+    if not row:
+        return None
+    s = row[0]
+    return {
+        "id": s.id,
+        "title": s.title,
+        "status": s.status,
+        "created_at": str(s.created_at) if s.created_at else None,
+        "updated_at": str(s.updated_at) if s.updated_at else None,
+        "message_count": row.message_count,
+        "cost": float(row.cost),
+        "tokens": int(row.tokens),
+    }
+
+
 async def list_sessions(db: AsyncSession) -> list[dict]:
     msg_subq = (
         select(

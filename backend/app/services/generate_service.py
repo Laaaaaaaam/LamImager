@@ -22,9 +22,26 @@ from app.services.prompt_optimizer import optimize_prompt
 from app.services.settings_service import get_setting
 from app.services.agent_service import run_agent_loop, AGENT_SYSTEM_PROMPT, ErrorEvent
 from app.services.task_manager import TaskManager, TaskStatus
-from app.utils.crypto import decrypt
+from app.services.api_manager import resolve_provider_vendor
 from app.utils.image_client import ImageClient, ImageGenError, ImageGenNotSupportedError
 from app.utils.llm_client import LLMClient
+from app.services.agent_intent_service import (
+    AgentIntent,
+    STRATEGY_MAP,
+    TASK_TYPE_LABELS,
+    parse_agent_intent,
+    resolve_context_references,
+    execute_multi_independent,
+    validate_agent_result,
+    _generate_iterative_steps,
+    _generate_radiate_params,
+    _extract_items_from_text,
+    _extract_style_from_text,
+    _extract_context_image_urls,
+    has_search_intent,
+    hybrid_parse_intent,
+)
+from app.services.plan_executor import execute_parallel, execute_iterative
 
 logger = logging.getLogger(__name__)
 
@@ -138,7 +155,11 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
             reference_images=data.reference_images if data.reference_images else None,
             reference_labels=data.reference_labels,
             negative_prompt=data.negative_prompt,
+            session_id=session_id,
         )
+
+        actual_count = len(all_image_urls)
+        task_manager.update_task(session_id, TaskStatus.GENERATING, progress=actual_count, total=actual_count, message=f"生成完成 {actual_count}/{actual_count}")
 
         provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
         provider = provider_result.scalar_one_or_none()
@@ -209,6 +230,7 @@ async def generate_images_core(
     reference_images: list[str] | None = None,
     reference_labels: list[str] | None = None,
     negative_prompt: str = "",
+    session_id: str | None = None,
 ) -> tuple[list[str], int, int]:
     """Core image generation: provider lookup + decrypt + generate. No session-side effects."""
     result = await db.execute(select(ApiProvider).where(ApiProvider.id == provider_id))
@@ -216,8 +238,8 @@ async def generate_images_core(
     if not provider:
         raise ValueError(f"Image provider not found: {provider_id}")
 
-    api_key = decrypt(provider.api_key_enc)
-    client = ImageClient(provider.base_url, api_key, provider.model_id)
+    base_url, api_key = await resolve_provider_vendor(db, provider)
+    client = ImageClient(base_url, api_key, provider.model_id)
 
     all_image_urls: list[str] = []
     tokens_in = 0
@@ -287,7 +309,7 @@ async def generate_images_core(
                 logger.warning(f"Image edit not supported or failed: {e}")
 
         if not all_image_urls:
-            prompt = await _apply_vision_fallback_core(db, prompt, reference_images)
+            prompt = await _apply_vision_fallback_core(db, prompt, reference_images, session_id=session_id)
             async def _generate_one(idx):
                 async with semaphore:
                     try:
@@ -319,11 +341,11 @@ async def _describe_reference_images(db: AsyncSession, provider_id: str, referen
         raise ValueError("LLM provider not found")
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception as e:
         raise ValueError(f"LLM API key decryption failed: {e}") from e
 
-    client = LLMClient(provider.base_url, api_key, provider.model_id)
+    client = LLMClient(base_url, api_key, provider.model_id)
 
     content_parts: list[dict] = []
     if len(reference_images) == 1:
@@ -372,6 +394,7 @@ async def _apply_vision_fallback_core(
     db: AsyncSession,
     prompt: str,
     reference_images: list[str],
+    session_id: str | None = None,
 ) -> str:
     llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
     if not llm_provider_id:
@@ -387,7 +410,7 @@ async def _apply_vision_fallback_core(
 
     if llm_provider_id:
         try:
-            image_desc = await _describe_reference_images(db, llm_provider_id, reference_images, None)
+            image_desc = await _describe_reference_images(db, llm_provider_id, reference_images, session_id)
             return f"{prompt}\n\n[参考图片视觉描述]:\n{image_desc}"
         except Exception as e:
             logger.warning(f"Vision fallback failed: {e}")
@@ -402,14 +425,18 @@ async def _execute_radiate(
     data: GenerateRequest,
     task_manager: TaskManager,
     accumulated_images: list[str],
+    intermediate_images: list[str],
     steps: list[dict],
     llm_provider_id: str,
     tokens_in: int,
     tokens_out: int,
     cost_total: float,
+    reference_images: list[str] | None = None,
+    reference_labels: list[dict] | None = None,
 ) -> dict | None:
     items = plan_meta.get("items") or []
     if isinstance(items, dict):
+        logger.warning("_execute_radiate: items is dict instead of list, discarding")
         items = []
     n_items = len(items) if items else 0
     if n_items == 0:
@@ -438,19 +465,18 @@ async def _execute_radiate(
         return {"error": "Image provider not found"}
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception as e:
         return {"error": f"Image key decrypt failed: {e}"}
 
-    client = ImageClient(provider.base_url, api_key, provider.model_id)
+    client = ImageClient(base_url, api_key, provider.model_id)
 
     cols, rows = _compute_grid_config(n_items)
-    steps.append({"type": "radiate", "items": n_items, "grid": f"{cols}x{rows}"})
+    steps.append({"type": "tool_result", "name": "radiate", "args": {"items": n_items, "grid": f"{cols}x{rows}"}, "content": f"锚点网格 {cols}x{rows}, {n_items} 个子项"})
 
     style_desc = plan_meta.get("style", "")
     theme = plan_meta.get("overall_theme", "")
     if not style_desc:
-        from app.models.message import Message
         msg_result = await db.execute(
             select(Message).where(
                 Message.session_id == session_id,
@@ -478,18 +504,70 @@ async def _execute_radiate(
             return {"error": "Failed to generate anchor grid"}
 
         anchor_url = anchor_urls[0]
+        intermediate_images.append(anchor_url)
         accumulated_images.append(anchor_url)
-        await add_system_message(db, session_id,
-            f"Agent 生成了风格锚点网格图 ({cols}x{rows})",
-            message_type="image",
-            metadata={"image_urls": [anchor_url]},
-        )
+
+        anchor_usage = response.get("usage", {}) if isinstance(response, dict) else {}
+        anchor_t_in = anchor_usage.get("prompt_tokens", 0)
+        anchor_t_out = anchor_usage.get("completion_tokens", 0)
+        anchor_cost = calc_cost(provider, tokens_in=anchor_t_in, tokens_out=anchor_t_out, call_count=1)
+        await record_billing(db, session_id=session_id, provider_id=provider.id,
+            billing_type=provider.billing_type.value, tokens_in=anchor_t_in, tokens_out=anchor_t_out,
+            cost=anchor_cost, currency=provider.currency,
+            detail={"type": "image_gen", "agent": True, "radiate": "anchor_grid"})
+        cost_total += anchor_cost
 
         task_manager.set_checkpoint_state(session_id, {"step": "anchor_grid", "image_url": anchor_url, "cols": cols, "rows": rows})
 
         grid_images = await _crop_grid(anchor_url, cols, rows)
         if not grid_images or len(grid_images) < n_items:
-            return {"error": f"Grid crop failed: got {len(grid_images)} cells, need {n_items}"}
+            logger.warning(f"Grid crop failed: got {len(grid_images or [])} cells, need {n_items}, falling back to direct generation")
+            for i in range(n_items):
+                item = items[i] if i < len(items) else {}
+                item_prompt = item.get("prompt", f"item {i+1}")
+                task_manager.update_task(session_id, TaskStatus.GENERATING,
+                    progress=i + 1, total=n_items,
+                    message=f"直接生成子项 {i + 1}/{n_items}: {item_prompt[:30]}")
+                try:
+                    if reference_images:
+                        response = await client.chat_edit(
+                            prompt=f"{item_prompt}. {style_desc} style.",
+                            images=reference_images[:4],
+                            reference_labels=reference_labels or None,
+                        )
+                    else:
+                        response = await client.generate(
+                            prompt=f"{item_prompt}. {style_desc} style.",
+                            n=1,
+                            size="1024x1024",
+                        )
+                    urls = ImageClient.extract_images(response)
+                    if urls:
+                        accumulated_images.extend(urls)
+                        steps.append({"type": "tool_result", "name": "generate_image", "content": item_prompt[:200], "args": {"prompt": item_prompt, "count": len(urls)}, "meta": {"image_urls": urls}})
+                        item_usage = response.get("usage", {}) if isinstance(response, dict) else {}
+                        item_t_in = item_usage.get("prompt_tokens", 0)
+                        item_t_out = item_usage.get("completion_tokens", 0)
+                        item_cost = calc_cost(provider, tokens_in=item_t_in, tokens_out=item_t_out, call_count=len(urls))
+                        await record_billing(db, session_id=session_id, provider_id=provider.id,
+                            billing_type=provider.billing_type.value, tokens_in=item_t_in, tokens_out=item_t_out,
+                            cost=item_cost, currency=provider.currency,
+                            detail={"type": "image_gen", "agent": True, "radiate": "item_fallback", "item_index": i})
+                        cost_total += item_cost
+                except Exception as e:
+                    logger.warning(f"Direct fallback item #{i} failed: {e}")
+            task_manager.update_task(session_id, TaskStatus.IDLE)
+            return {
+                "images": accumulated_images,
+                "final_images": accumulated_images,
+                "intermediate_images": intermediate_images,
+                "steps": steps,
+                "strategy": "radiate",
+                "cost": cost_total,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "cancelled": False,
+            }
 
         for i in range(n_items):
             item = items[i] if i < len(items) else {}
@@ -499,27 +577,40 @@ async def _execute_radiate(
                 message=f"生成子项 {i + 1}/{n_items}: {item_prompt[:30]}")
 
             try:
+                edit_images = [grid_images[i]]
+                if reference_images:
+                    edit_images.extend(reference_images[:3])
                 response = await client.chat_edit(
                     prompt=f"{item_prompt}. {style_desc} style.",
-                    images=[grid_images[i]],
+                    images=edit_images,
+                    reference_labels=reference_labels or None,
                 )
                 urls = ImageClient.extract_images_from_chat(response)
                 if urls:
                     accumulated_images.extend(urls)
-                    await add_system_message(db, session_id,
-                        f"Agent 生成子项 {i+1}: {item_prompt[:40]}",
-                        message_type="image",
-                        metadata={"image_urls": urls},
-                    )
-                    steps.append({"type": "radiate_item", "index": i, "prompt": item_prompt})
+                    steps.append({"type": "tool_result", "name": "generate_image", "content": item_prompt[:200], "args": {"prompt": item_prompt, "count": len(urls)}, "meta": {"image_urls": urls}})
+                    item_usage = response.get("usage", {}) if isinstance(response, dict) else {}
+                    item_t_in = item_usage.get("prompt_tokens", 0)
+                    item_t_out = item_usage.get("completion_tokens", 0)
+                    item_cost = calc_cost(provider, tokens_in=item_t_in, tokens_out=item_t_out, call_count=len(urls))
+                    await record_billing(db, session_id=session_id, provider_id=provider.id,
+                        billing_type=provider.billing_type.value, tokens_in=item_t_in, tokens_out=item_t_out,
+                        cost=item_cost, currency=provider.currency,
+                        detail={"type": "image_gen", "agent": True, "radiate": "item", "item_index": i})
+                    cost_total += item_cost
             except Exception as e:
                 logger.warning(f"Style anchor item #{i} failed: {e}")
 
         task_manager.update_task(session_id, TaskStatus.IDLE)
         return {
             "images": accumulated_images,
+            "final_images": accumulated_images,
+            "intermediate_images": intermediate_images,
             "steps": steps,
             "strategy": "radiate",
+            "cost": cost_total,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
             "cancelled": False,
         }
 
@@ -529,30 +620,60 @@ async def _execute_radiate(
         return {"error": str(e)}
 
 
-async def _build_agent_context(db: AsyncSession, session_id: str) -> list[dict]:
+async def _build_agent_context(db: AsyncSession, session_id: str, max_tokens: int = 3000) -> list[dict]:
     import json
     result = await db.execute(
-        select(Message).where(Message.session_id == session_id).order_by(Message.created_at.asc()).limit(8)
+        select(Message).where(Message.session_id == session_id).order_by(Message.created_at.desc()).limit(20)
     )
     msgs = result.scalars().all()
+    msgs.reverse()
     context = []
-    for m in msgs:
-        if m.role in ("user", "assistant") and m.message_type in ("text", "agent"):
-            content = m.content[:500] if m.content else ""
-            if m.message_type == "agent" and m.metadata_:
-                try:
-                    import json
-                    meta = json.loads(m.metadata_) if isinstance(m.metadata_, str) else m.metadata_
-                    content = meta.get("final_output", content)[:500]
-                except Exception:
-                    pass
-            if content.strip():
-                context.append({"role": m.role.value if hasattr(m.role, "value") else m.role, "content": content})
+    token_est = 0
+    image_count = 0
+    for m in reversed(msgs):
+        if m.role not in ("user", "assistant"):
+            continue
+        if m.message_type not in ("text", "agent"):
+            continue
+        content = m.content or ""
+        if m.message_type == "agent" and m.metadata_:
+            try:
+                meta = json.loads(m.metadata_) if isinstance(m.metadata_, str) else m.metadata_
+                content = meta.get("final_output", content)
+            except Exception:
+                pass
+        if not content.strip():
+            continue
+        est = len(content) // 3
+        if token_est + est > max_tokens:
+            remain = max_tokens - token_est
+            if remain > 0:
+                content = content[:remain * 3] + "..."
+            else:
+                break
+        role = m.role.value if hasattr(m.role, "value") else m.role
+
+        image_urls = []
+        if m.metadata_ and image_count < 2:
+            try:
+                meta = json.loads(m.metadata_) if isinstance(m.metadata_, str) else m.metadata_
+                image_urls = (meta.get("image_urls") or [])[:2 - image_count]
+            except Exception:
+                pass
+
+        if image_urls:
+            parts: list[dict] = [{"type": "text", "text": f"{content}\n\n[上下文包含 {len(image_urls)} 张已生成的图片]"}]
+            context.insert(0, {"role": role, "content": parts})
+            image_count += len(image_urls)
+        else:
+            context.insert(0, {"role": role, "content": content})
+        token_est += est
+        if token_est >= max_tokens:
+            break
     return context
 
 
 def _extract_items_from_text(text: str) -> list[dict]:
-    import re
     items = []
     emojis = {
         "开心": "happy expression", "难过": "sad expression", "生气": "angry expression",
@@ -567,12 +688,6 @@ def _extract_items_from_text(text: str) -> list[dict]:
     for kw, prompt in emojis.items():
         if kw in text:
             items.append({"prompt": prompt})
-    if not items:
-        count_match = re.search(r'(\d+)\s*[张张个]', text)
-        if count_match:
-            count = int(count_match.group(1))
-            for i in range(count):
-                items.append({"prompt": f"item {i+1}"})
     return items
 
 
@@ -637,11 +752,11 @@ async def _expand_grid_images(
         return None
 
     try:
-        api_key = decrypt(provider.api_key_enc)
+        base_url, api_key = await resolve_provider_vendor(db, provider)
     except Exception:
         return None
 
-    client = ImageClient(provider.base_url, api_key, provider.model_id)
+    client = ImageClient(base_url, api_key, provider.model_id)
 
     for i in range(n):
         ref = grid_images[i]
@@ -731,17 +846,84 @@ def _build_multimodal_context(messages: list[dict]) -> list[dict]:
     return content_parts
 
 
+async def _enhance_with_search(
+    db: AsyncSession,
+    session_id: str,
+    prompt: str,
+    task_manager: TaskManager,
+) -> str:
+    from app.tools.web_search import WebSearchTool
+    from app.tools.image_search import ImageSearchTool
+
+    search_provider_result = await db.execute(
+        select(ApiProvider).where(
+            ApiProvider.provider_type == ProviderType.web_search,
+            ApiProvider.is_active == True,
+        )
+    )
+    search_provider = search_provider_result.scalars().first()
+    if not search_provider:
+        logger.info("No web_search provider configured, skipping search enhancement")
+        return ""
+
+    try:
+        _, api_key = await resolve_provider_vendor(db, search_provider)
+    except Exception as e:
+        logger.warning(f"Search API key decryption failed: {e}")
+        return ""
+
+    retry_count_val = await get_setting(db, "search_retry_count")
+    retry_count = retry_count_val.get("value", 3) if retry_count_val else 3
+
+    task_manager.update_task(session_id, TaskStatus.GENERATING,
+        message="搜索参考资料中...")
+
+    search_context_parts = []
+
+    web_tool = WebSearchTool()
+    web_result = await web_tool.execute(query=prompt, max_results=5, api_key=api_key, retry_count=retry_count)
+    if web_result.content and not web_result.meta.get("error"):
+        search_context_parts.append(f"[网页搜索结果]\n{web_result.content}")
+        await add_system_message(db, session_id,
+            f"搜索参考: 找到相关网页资料",
+            message_type="image",
+            metadata={"search_type": "web", "sources": web_result.meta.get("sources", [])})
+
+    image_tool = ImageSearchTool()
+    img_result = await image_tool.execute(query=prompt, max_results=5, api_key=api_key, retry_count=retry_count)
+    if img_result.content and not img_result.meta.get("error"):
+        search_context_parts.append(f"[图片搜索结果]\n{img_result.content}")
+        image_urls = [s.get("image_url", "") for s in img_result.meta.get("sources", []) if s.get("image_url")]
+        if image_urls:
+            await add_system_message(db, session_id,
+                f"搜索参考: 找到 {len(image_urls)} 张参考图",
+                message_type="image",
+                metadata={"search_type": "image", "image_urls": image_urls[:4]})
+
+    return "\n\n".join(search_context_parts)
+
+
 async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict:
     session_id = data.session_id
     prompt = data.prompt
 
     task_manager = TaskManager()
-    task_manager.update_task(session_id, TaskStatus.GENERATING, message="Agent 执行中")
+    correlation_id = f"agent-{session_id}"
+
+    if not prompt or not prompt.strip():
+        task_manager.update_task(session_id, TaskStatus.ERROR, message="提示词不能为空")
+        await add_system_message(db, session_id, "提示词不能为空，请输入具体的图像生成需求", message_type="error")
+        return {
+            "error": "提示词不能为空，请输入具体的图像生成需求",
+            "images": [],
+            "steps": [],
+            "intent": {"task_type": "single", "expected_count": 0, "strategy": "single", "items": [], "references": [], "requires_consistency": False, "user_goal": ""},
+        }
 
     await add_message(db, session_id, MessageCreate(
         content=prompt,
         message_type="text",
-        metadata={"agent_mode": True, "agent_tools": data.agent_tools, "agent_plan_strategy": data.agent_plan_strategy},
+        metadata={"agent_mode": True},
     ))
 
     llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
@@ -773,180 +955,323 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         if image_provider:
             image_provider_id = image_provider.id
 
-    # Direct radiate routing for 套图/表情包/系列/组 requests
-    import re as _re
-    _set_keywords = ["套图", "表情包", "表情", "套", "组图", "系列图", "图标集"]
-    _is_set_request = any(kw in prompt for kw in _set_keywords)
-    _count_m = _re.search(r'(\d+)\s*[张张个]', prompt)
-    _n_items = int(_count_m.group(1)) if _count_m else 0
-    if _is_set_request and _n_items >= 2:
-        from app.models.plan_template import PlanTemplate
-        tpl_result = await db.execute(
-            select(PlanTemplate).where(
-                PlanTemplate.name == "套图生成",
-                PlanTemplate.is_builtin == True,
-            )
-        )
-        radiate_template = tpl_result.scalar_one_or_none()
-        if radiate_template:
-            items = _extract_items_from_text(prompt)
-            style = _extract_style_from_text(prompt)
-            radiate_meta = {
-                "items": items,
-                "style": style,
-                "overall_theme": prompt,
-                "strategy": "radiate",
-                "steps": radiate_template.steps or [],
-            }
-            logger.info(f"Direct radiate routing: {_n_items} items, style={style}")
-            steps = [{"type": "radiate", "strategy": "radiate", "items": items}]
-            result = await _execute_radiate(
-                db, session_id, radiate_meta, data,
-                task_manager, [], steps,
-                llm_provider_id, 0, 0, 0.0,
-            )
-            if result:
-                return result
+    # === Resolve LLM provider for hybrid intent parsing ===
+    llm_api_key = ""
+    llm_base_url = ""
+    llm_model_id = ""
+    llm_provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
+    llm_prov = llm_provider_result.scalar_one_or_none()
+    if llm_prov:
+        try:
+            llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
+            llm_model_id = llm_prov.model_id
+        except Exception as e:
+            logger.warning(f"LLM key decrypt failed for intent classifier, falling back to regex: {e}")
 
-    messages = [
-        {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
-    ]
-
-    try:
-        history = await _build_agent_context(db, session_id)
-        if history:
-            messages = [{"role": "system", "content": AGENT_SYSTEM_PROMPT}] + history + [{"role": "user", "content": prompt}]
-    except Exception:
-        pass
-
-    steps = []
-    final_output = ""
-    tokens_in = 0
-    tokens_out = 0
-    cost_total = 0.0
-    cancelled = False
-    accumulated_images: list[str] = []
-
-    cancel_event = task_manager.get_cancel_event(session_id)
-
-    CORE_AGENT_TOOLS = ["generate_image", "plan"]
-    all_tools = list(set(CORE_AGENT_TOOLS + (data.agent_tools or [])))
-
-    async for event in run_agent_loop(
+    # === Agent Intent Parsing (regex → LLM hybrid) ===
+    context_images = _extract_context_image_urls(data.context_messages) or None
+    intent = await hybrid_parse_intent(
+        prompt=prompt,
+        image_count=data.image_count,
+        llm_api_key=llm_api_key,
+        llm_base_url=llm_base_url,
+        llm_model_id=llm_model_id,
+        context_images=context_images,
+        context_messages=data.context_messages,
+        reference_labels=data.reference_labels,
+    )
+    intent.references = await resolve_context_references(
         db=db,
-        provider_id=llm_provider_id,
-        messages=messages,
-        tools=all_tools,
         session_id=session_id,
-        cancel_event=cancel_event,
-    ):
-        if event.type == "error":
-            task_manager.update_task(session_id, TaskStatus.ERROR, message=event.error)
-            final_output = f"Agent 执行失败: {event.error}"
-            break
-        elif event.type == "cancelled":
-            cancelled = True
-            final_output = event.partial_output
-            tokens_in = event.tokens_in
-            tokens_out = event.tokens_out
-            break
-        elif event.type == "tool_call":
-            steps.append({"type": "tool_call", "name": event.name, "args": event.args})
-        elif event.type == "tool_result":
-            steps.append({"type": "tool_result", "name": event.name, "content": event.content[:500]})
-            if event.name == "generate_image" and event.meta and event.meta.get("image_urls"):
-                urls = event.meta.get("image_urls", [])
-                accumulated_images.extend(urls)
-                await add_system_message(db, session_id,
-                    f"Agent 生成了 {len(urls)} 张图片",
-                    message_type="image",
-                    metadata={"image_urls": urls},
-                )
-                t_in = event.meta.get("tokens_in", 0)
-                t_out = event.meta.get("tokens_out", 0)
-                if (t_in or t_out) and image_provider_id:
-                    img_provider = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
-                    img_prov = img_provider.scalar_one_or_none()
-                    if img_prov:
-                        img_cost = calc_cost(img_prov, tokens_in=t_in, tokens_out=t_out, call_count=len(urls))
-                        await record_billing(db, session_id=session_id, provider_id=img_prov.id,
-                            billing_type=img_prov.billing_type.value, tokens_in=t_in, tokens_out=t_out,
-                            cost=img_cost, currency=img_prov.currency,
-                            detail={"type": "image_gen", "agent": True, "image_count": len(urls)})
-                        cost_total += img_cost
-            if event.name == "generate_image" and event.meta and event.meta.get("grid_images"):
-                grid_imgs = event.meta.get("grid_images", [])
-                grid_config = event.meta.get("grid_config", {})
-                result = await _expand_grid_images(
-                    db, session_id, grid_imgs, grid_config,
-                    task_manager, accumulated_images, steps,
-                )
-                if result:
-                    return result
-            if event.name == "plan" and event.meta and event.meta.get("strategy") == "radiate":
-                items = event.meta.get("items", [])
-                if not items:
-                    from app.models.message import Message
-                    msg_result = await db.execute(
-                        select(Message).where(
-                            Message.session_id == session_id,
-                            Message.role == "user",
-                        ).order_by(Message.created_at.desc()).limit(1)
-                    )
-                    user_msg = msg_result.scalars().first()
-                    user_text = user_msg.content if user_msg else data.prompt
-                    items = _extract_items_from_text(user_text)
-                    if not items:
-                        import re
-                        count_m = re.search(r'(\d+)\s*[张张个]', user_text)
-                        if count_m:
-                            n = int(count_m.group(1))
-                            items = [{"prompt": f"item {i+1}"} for i in range(n)]
-                    event.meta["items"] = items
-                if items:
-                    with open("E:/LamImager/backend/radiate_debug.log", "a", encoding="utf-8") as f:
-                        f.write(f"RADIATE: executing with {len(items)} items\n")
-                    result = await _execute_radiate(
-                        db, session_id, event.meta, data,
-                        task_manager, accumulated_images, steps,
-                        llm_provider_id, tokens_in, tokens_out, cost_total,
-                    )
-                    if result:
-                        return result
-                else:
-                    with open("E:/LamImager/backend/radiate_debug.log", "a", encoding="utf-8") as f:
-                        f.write("RADIATE: items empty, skipped\n")
-        elif event.type == "token":
-            final_output += event.content
-        elif event.type == "done":
-            tokens_in = event.tokens_in
-            tokens_out = event.tokens_out
-            cost_total = event.cost
+        prompt=prompt,
+        context_messages=data.context_messages,
+        reference_labels=data.reference_labels,
+    )
+    intent.reference_images = data.reference_images or []
+    intent.reference_labels = data.reference_labels or []
+    for item in intent.items:
+        if not item.reference_urls:
+            item.reference_urls = intent.references
 
-    cancel_label = " (已取消)" if cancelled else ""
+    # Strategy is determined by code, not by frontend or LLM
+    strategy = STRATEGY_MAP.get(intent.task_type, "single")
+    type_label = TASK_TYPE_LABELS.get(intent.task_type, "未知")
+
+    # === Search Enhancement ===
+    search_context = ""
+    if has_search_intent(prompt):
+        search_context = await _enhance_with_search(db, session_id, prompt, task_manager)
+        if search_context:
+            enhanced_prompt = f"{prompt}\n\n[搜索参考信息]\n{search_context}"
+            data.prompt = enhanced_prompt
+            prompt = enhanced_prompt
+
+    from app.core.events import LamEvent
+    await task_manager.publish(LamEvent(
+        event_type="task_started",
+        correlation_id=correlation_id,
+        payload={
+            "type": "task_started",
+            "session_id": session_id,
+            "task_type": intent.task_type,
+            "strategy": strategy,
+        },
+    ))
+    task_manager.update_task(session_id, TaskStatus.GENERATING,
+        message=f"{type_label} | 策略: {strategy}",
+        task_type=intent.task_type, strategy=strategy)
+
+    # === Fixed Strategy Routing ===
+    result: dict | None = None
+
+    if strategy == "single":
+        result = await _execute_single(
+            db, session_id, data, intent, task_manager,
+            image_provider_id, llm_provider_id,
+        )
+
+    elif strategy == "parallel":
+        result = await execute_multi_independent(
+            db=db,
+            session_id=session_id,
+            intent=intent,
+            data=data,
+            task_manager=task_manager,
+            llm_provider_id=llm_provider_id,
+            image_provider_id=image_provider_id,
+        )
+
+    elif strategy == "iterative":
+        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
+        llm_prov = llm_result.scalar_one_or_none()
+        if not llm_prov:
+            result = {"error": "LLM provider not found", "images": [], "steps": []}
+        else:
+            try:
+                llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
+            except Exception as e:
+                result = {"error": f"LLM API key decryption failed: {e}", "images": [], "steps": []}
+                llm_api_key = ""
+                llm_base_url = ""
+
+            if not result:
+                task_manager.update_task(session_id, TaskStatus.GENERATING,
+                    message=f"迭代精修 | LLM 生成步骤")
+                steps = await _generate_iterative_steps(
+                    prompt=prompt,
+                    llm_api_key=llm_api_key,
+                    llm_base_url=llm_base_url,
+                    llm_model_id=llm_prov.model_id,
+                    context_images=context_images,
+                )
+                if not steps:
+                    result = {"error": "无法生成迭代步骤，请描述更具体（如：先出草图，再精修细节）", "images": [], "steps": []}
+                else:
+                    result = await execute_iterative(
+                        db=db,
+                        session_id=session_id,
+                        steps=steps,
+                        provider_id=image_provider_id,
+                        task_manager=task_manager,
+                        accumulated_images=[],
+                        llm_provider_id=llm_provider_id,
+                        reference_images=intent.reference_images or None,
+                        reference_labels=intent.reference_labels or None,
+                    )
+
+    elif strategy == "radiate":
+        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
+        llm_prov = llm_result.scalar_one_or_none()
+        if not llm_prov:
+            result = {"error": "LLM provider not found", "images": [], "steps": []}
+        else:
+            try:
+                llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
+            except Exception as e:
+                result = {"error": f"LLM API key decryption failed: {e}", "images": [], "steps": []}
+                llm_api_key = ""
+                llm_base_url = ""
+
+            if not result:
+                task_manager.update_task(session_id, TaskStatus.GENERATING,
+                    message=f"套图辐射 | LLM 生成子项")
+                radiate_params = await _generate_radiate_params(
+                    prompt=prompt,
+                    expected_count=intent.expected_count,
+                    llm_api_key=llm_api_key,
+                    llm_base_url=llm_base_url,
+                    llm_model_id=llm_prov.model_id,
+                    context_images=context_images,
+                )
+                items = radiate_params.get("items", [])
+                if not items:
+                    result = {"error": "无法从需求中提取套图子项，请描述更具体（如：做一套6个表情包，包含开心、生气、惊讶...）", "images": [], "steps": []}
+                else:
+                    plan_meta = {
+                        "items": items,
+                        "style": radiate_params.get("style", ""),
+                        "overall_theme": radiate_params.get("overall_theme", ""),
+                    }
+                    result = await _execute_radiate(
+                        db, session_id, plan_meta, data,
+                        task_manager, [], [], [],
+                        llm_provider_id, 0, 0, 0.0,
+                        reference_images=intent.reference_images or None,
+                        reference_labels=intent.reference_labels or None,
+                    )
+
+    # === Handle result ===
+    if result is None:
+        result = {"error": "未知策略，执行失败", "images": [], "steps": []}
+
+    # Handle error results
+    if result.get("error"):
+        error_msg = result["error"]
+        task_manager.update_task(session_id, TaskStatus.ERROR, message=error_msg)
+        await add_system_message(db, session_id, f"执行失败: {error_msg}", message_type="error")
+        from dataclasses import asdict as _asdict
+        intent_data = _asdict(intent)
+        await add_system_message(db, session_id,
+            f"执行失败: {error_msg}",
+            message_type="agent",
+            metadata={
+                "steps": result.get("steps", []),
+                "final_output": f"执行失败: {error_msg}",
+                "images": result.get("images", []),
+                "final_images": result.get("final_images", []),
+                "intermediate_images": [],
+                "intent": intent_data,
+                "tokens_in": result.get("tokens_in", 0),
+                "tokens_out": result.get("tokens_out", 0),
+                "cost": result.get("cost", 0),
+                "cancelled": False,
+                "task_type": intent.task_type,
+                "strategy": strategy,
+            },
+        )
+        await task_manager.publish(LamEvent(
+            event_type="task_failed",
+            correlation_id=correlation_id,
+            payload={"type": "agent_error", "session_id": session_id, "error": error_msg},
+        ))
+        result["intent"] = intent_data
+        return result
+
+    # Validate result against intent
+    accumulated_images = result.get("images", [])
+    if not validate_agent_result(intent, {"images": accumulated_images, "final_images": result.get("final_images", [])}):
+        logger.warning(
+            f"Agent produced {len(accumulated_images)} images, expected {intent.expected_count}"
+        )
+        existing_output = result.get("output", "")
+        if existing_output.strip():
+            result["output"] = existing_output + f"\n\n(注意: 请求 {intent.expected_count} 张，实际生成 {len(accumulated_images)} 张)"
+        else:
+            result["output"] = f"(注意: 请求 {intent.expected_count} 张，实际生成 {len(accumulated_images)} 张)"
+
+    from dataclasses import asdict as _asdict
+    intent_data = _asdict(intent)
+    final_output = result.get("output", "Agent 执行完成")
     await add_system_message(db, session_id,
-        (final_output.strip() or "Agent 执行完成") + cancel_label,
+        final_output,
         message_type="agent",
         metadata={
-            "steps": steps,
+            "steps": result.get("steps", []),
             "final_output": final_output,
             "images": accumulated_images,
-            "tokens_in": tokens_in,
-            "tokens_out": tokens_out,
-            "cost": cost_total,
-            "cancelled": cancelled,
+            "final_images": result.get("final_images", []),
+            "intermediate_images": result.get("intermediate_images", []),
+            "intent": intent_data,
+            "tokens_in": result.get("tokens_in", 0),
+            "tokens_out": result.get("tokens_out", 0),
+            "cost": result.get("cost", 0),
+            "cancelled": result.get("cancelled", False),
+            "task_type": intent.task_type,
+            "strategy": strategy,
         },
     )
 
     task_manager.update_task(session_id, TaskStatus.IDLE)
+    await task_manager.publish(LamEvent(
+        event_type="task_completed",
+        correlation_id=correlation_id,
+        payload={
+            "type": "agent_done",
+            "session_id": session_id,
+            "task_type": intent.task_type,
+            "strategy": strategy,
+            "image_count": len(accumulated_images),
+        },
+    ))
 
-    return {
-        "output": final_output,
-        "steps": steps,
-        "cost": cost_total,
-        "tokens_in": tokens_in,
-        "tokens_out": tokens_out,
-        "cancelled": cancelled,
-        "images": accumulated_images,
-    }
+    result["intent"] = intent_data
+    return result
+
+
+async def _execute_single(
+    db: AsyncSession,
+    session_id: str,
+    data: GenerateRequest,
+    intent: AgentIntent,
+    task_manager: TaskManager,
+    image_provider_id: str,
+    llm_provider_id: str,
+) -> dict:
+    if not image_provider_id:
+        task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
+        return {"error": "未配置图像生成API，请先在API管理中添加", "images": [], "steps": []}
+
+    prompt = data.prompt
+    image_size = data.image_size or "1024x1024"
+    image_count = intent.expected_count
+
+    task_manager.update_task(session_id, TaskStatus.GENERATING,
+        message=f"单图生成 | 生成 {image_count} 张图片")
+
+    all_refs: list[str] = list(intent.reference_images or [])
+    if intent.references:
+        url_b64 = await ImageClient.urls_to_base64(intent.references[:4])
+        all_refs.extend(url_b64)
+    reference_images = all_refs[:4] if all_refs else None
+
+    try:
+        urls, tokens_in, tokens_out = await generate_images_core(
+            db=db,
+            provider_id=image_provider_id,
+            prompt=prompt,
+            image_count=image_count,
+            image_size=image_size,
+            negative_prompt=data.negative_prompt,
+            reference_images=reference_images,
+            reference_labels=intent.reference_labels or None,
+            session_id=session_id,
+        )
+
+        if urls:
+            pass  # images stored in agent message metadata.images, not as separate message
+
+        if image_provider_id and urls:
+            img_provider = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
+            img_prov = img_provider.scalar_one_or_none()
+            if img_prov:
+                img_cost = calc_cost(img_prov, tokens_in=tokens_in, tokens_out=tokens_out, call_count=len(urls))
+                await record_billing(db, session_id=session_id, provider_id=img_prov.id,
+                    billing_type=img_prov.billing_type.value, tokens_in=tokens_in, tokens_out=tokens_out,
+                    cost=img_cost, currency=img_prov.currency,
+                    detail={"type": "image_gen", "agent": True, "image_count": len(urls)})
+
+        output = f"已生成 {len(urls)} 张图片" if urls else "图像生成API返回空结果，请检查API配置或更换提示词"
+        return {
+            "output": output,
+            "steps": [{"type": "tool_result", "name": "generate_image", "content": prompt[:200], "args": {"prompt": prompt, "count": image_count}, "meta": {"image_urls": urls}}],
+            "cost": 0.0,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "cancelled": False,
+            "images": urls,
+            "final_images": [],
+            "intermediate_images": [],
+        }
+    except Exception as e:
+        logger.error(f"_execute_single failed: {e}")
+        return {"error": f"图片生成失败: {e}", "images": [], "steps": []}

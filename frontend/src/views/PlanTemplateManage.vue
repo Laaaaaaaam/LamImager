@@ -25,7 +25,7 @@
             </span>
           </td>
           <td>{{ strategyLabel(t.strategy) }}</td>
-          <td>{{ (t.steps as any[] || []).length }}</td>
+          <td>{{ (t.steps as PlanStep[] || []).length }}</td>
           <td>{{ t.description }}</td>
           <td class="actions-cell">
             <button class="btn btn-sm" @click="openDrawer(t)">编辑</button>
@@ -59,6 +59,7 @@
           <select v-model="form.strategy">
             <option value="parallel">并发生成（批量探索）</option>
             <option value="iterative">顺序迭代（逐步精修）</option>
+            <option value="radiate">辐射套图（风格锚点+逐项）</option>
           </select>
         </div>
         <div class="form-group">
@@ -91,6 +92,7 @@
           <select v-model="aiStrategy">
             <option value="parallel">并发生成（批量探索）</option>
             <option value="iterative">顺序迭代（逐步精修）</option>
+            <option value="radiate">辐射套图（风格锚点+逐项）</option>
           </select>
         </div>
         <button class="btn btn-primary" style="width: 100%" @click="generateWithAi" :disabled="!aiDescription.trim() || aiGenerating">
@@ -111,7 +113,7 @@ import { planTemplateApi } from '../api/planTemplate'
 import { promptApi } from '../api/prompt'
 import { settingsApi } from '../api/settings'
 import { useProviderStore } from '../stores/provider'
-import type { PlanTemplate } from '../types'
+import type { PlanStep, PlanTemplate } from '../types'
 import { dialog } from '../composables/useDialog'
 
 const providerStore = useProviderStore()
@@ -136,6 +138,7 @@ const aiStreamText = ref('')
 const strategyLabelMap: Record<string, string> = {
   parallel: '并发生成',
   iterative: '顺序迭代',
+  radiate: '辐射套图',
 }
 
 function strategyLabel(key: string) {

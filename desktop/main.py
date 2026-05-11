@@ -228,6 +228,7 @@ def main():
             height=win_h,
             min_size=(min_w, 600),
             confirm_close=False,
+            text_select=True,
         )
         window.events.closing += on_close
         _log("webview window created, starting event loop...")

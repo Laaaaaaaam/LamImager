@@ -175,6 +175,8 @@ Body:
 }
 ```
 
+> **Note**: `agent_plan_strategy` is deprecated — the backend now determines strategy automatically based on intent parsing. The field is accepted but ignored.
+
 Response: `Message` (assistant message with generated images)
 
 > **Image-to-Image**: When `reference_images` is non-empty, the backend uses a 3-tier fallback:
@@ -201,15 +203,17 @@ Response: `{"message": "Cancelled"}`
 ```
 POST /api/sessions/{id}/agent/checkpoint
 ```
-Approve or reject agent checkpoint (e.g. anchor grid quality check).
+Approve or reject agent checkpoint (e.g. anchor grid quality check). Checkpoint auto-rejects after 300s timeout.
 
 Body:
 ```json
 {
-  "approved": true,
+  "action": "approve",
   "feedback": ""
 }
 ```
+
+`action` values: `"approve"` (continue) | `"reject"` (abort). Any non-approve value is treated as rejection.
 
 Response:
 ```json
@@ -224,6 +228,8 @@ Response:
 GET /api/images/proxy?url=<encoded_url>
 ```
 Fetches an external image server-side and returns the bytes. Used by the frontend to fetch cross-origin generated images for iterative refinement, avoiding browser CORS restrictions.
+
+Security: Only `http`/`https` URLs allowed. DNS resolution blocks private/loopback IPs. Response Content-Type must be `image/*`.
 
 Response: raw image bytes with appropriate `Content-Type` header.
 
@@ -262,6 +268,35 @@ Body:
   "default_image_width": 1024,
   "default_image_height": 1024,
   "max_concurrent": 5
+}
+```
+
+### Get Arbitrary Setting
+```
+GET /api/settings/{key}
+```
+
+Supported keys: `search_retry_count`, `download_directory`
+
+Response:
+```json
+{
+  "key": "download_directory",
+  "value": {
+    "value": "D:\\Downloads\\images"
+  }
+}
+```
+
+### Set Arbitrary Setting
+```
+PUT /api/settings/{key}
+```
+
+Body:
+```json
+{
+  "value": "D:\\Downloads\\images"
 }
 ```
 
@@ -726,6 +761,42 @@ Response:
   ]
 }
 ```
+
+---
+
+## Download
+
+### Download Image to Directory
+```
+POST /api/download/image
+```
+
+Saves an image from a URL to the configured download directory. Requires `download_directory` to be set via `PUT /api/settings/download_directory`.
+
+Security: Filename validated against whitelist regex `^[\w\u4e00-\u9fff.\-]+$`. Resolved path must be within download directory (path traversal protection).
+
+Body:
+```json
+{
+  "url": "https://example.com/image.png",
+  "filename": "image.png"
+}
+```
+
+If the file already exists, a counter is appended: `image (1).png`, `image (2).png`, etc.
+
+Response:
+```json
+{
+  "success": true,
+  "path": "D:\\Downloads\\images\\image.png",
+  "size": 123456
+}
+```
+
+Errors:
+- `400` — Download directory not configured or path doesn't exist
+- `502` — Failed to download image from source URL
 
 ---
 

@@ -1,8 +1,35 @@
+export interface ApiVendor {
+  id: string
+  name: string
+  base_url: string
+  api_key_masked: string
+  is_active: boolean
+  model_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ApiVendorCreate {
+  name: string
+  base_url: string
+  api_key: string
+  is_active?: boolean
+}
+
+export interface ApiVendorUpdate {
+  name?: string
+  base_url?: string
+  api_key?: string
+  is_active?: boolean
+}
+
 export interface ApiProvider {
   id: string
   nickname: string
   base_url: string
   model_id: string
+  vendor_id: string | null
+  vendor_name: string
   api_key_masked: string
   provider_type: 'image_gen' | 'llm' | 'web_search'
   billing_type: 'per_call' | 'per_token'
@@ -15,9 +42,10 @@ export interface ApiProvider {
 
 export interface ApiProviderCreate {
   nickname: string
-  base_url: string
+  base_url?: string
   model_id: string
-  api_key: string
+  vendor_id?: string | null
+  api_key?: string
   provider_type: 'image_gen' | 'llm' | 'web_search'
   billing_type?: 'per_call' | 'per_token'
   unit_price?: number
@@ -27,10 +55,11 @@ export interface ApiProviderCreate {
 
 export interface ApiProviderUpdate {
   nickname?: string
-  base_url?: string
+  base_url?: string | null
   model_id?: string
+  vendor_id?: string | null
   api_key?: string
-  provider_type?: 'image_gen' | 'llm'
+  provider_type?: 'image_gen' | 'llm' | 'web_search'
   billing_type?: 'per_call' | 'per_token'
   unit_price?: number
   currency?: string
@@ -130,6 +159,8 @@ export interface TaskHandle {
   progress: number
   total: number
   abortController: AbortController | null
+  taskType?: string
+  strategy?: string
 }
 
 export interface TaskUpdateEvent {
@@ -138,6 +169,8 @@ export interface TaskUpdateEvent {
   progress: number
   total: number
   message: string
+  task_type?: string
+  strategy?: string
 }
 
 export interface Message {
@@ -174,16 +207,12 @@ export interface PlanStep {
   description: string
   image_count?: number
   image_size?: string
+  /** @deprecated */
   reference_step_indices?: number[]
   checkpoint?: {
     enabled: boolean
     message: string
     auto_continue_seconds?: number
-  }
-  condition?: {
-    type: 'manual_select' | 'auto_quality' | 'none'
-    on_pass?: { reference_indices: number[] }
-    on_fail?: { retry: boolean; max_retries: number }
   }
 }
 
@@ -191,7 +220,7 @@ export interface TemplateVariable {
   key: string
   type: 'string' | 'select' | 'number'
   label: string
-  default: string
+  default: string | any[]
   options?: string[]
   required?: boolean
 }
@@ -220,6 +249,56 @@ export interface DefaultModelsConfig {
 export interface AgentStepEvent {
   type: 'tool_call' | 'tool_result'
   name: string
+  args?: Record<string, unknown>
+  content?: string
+  meta?: Record<string, unknown>
+}
+
+export interface LamEventPayload {
+  type: string
+  session_id: string
+  content?: string
+  name?: string
+  args?: Record<string, unknown>
+  meta?: Record<string, unknown>
+  error?: string
+  reason?: string
+  retry_count?: number
+  tokens_in?: number
+  tokens_out?: number
+  cost?: number
+  partial_output?: string
+  tool_name?: string
+  message?: string
+  preview?: string
+  status?: string
+  progress?: number
+  total?: number
+}
+
+export interface LamEvent {
+  event_id: string
+  timestamp: number
+  source_product: string
+  target_product: string | null
+  event_type: string
+  correlation_id: string
+  payload: LamEventPayload
+}
+
+export interface AgentStreamState {
+  sessionId: string
+  status: 'connecting' | 'thinking' | 'tool_running' | 'paused' | 'done' | 'error'
+  content: string
+  steps: AgentStreamStep[]
+  cost: number | null
+}
+
+export interface AgentStreamStep {
+  id: string
+  type: 'tool_call' | 'tool_result' | 'checkpoint' | 'plan'
+  name: string
+  status: 'pending' | 'running' | 'done' | 'error'
   args?: Record<string, unknown>
   content?: string
   meta?: Record<string, unknown>

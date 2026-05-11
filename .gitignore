@@ -57,3 +57,4 @@ docs/plans/
 # Test files
 test_*.jpg
 test_*.png
+.pytest_cache/

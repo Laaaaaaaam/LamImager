@@ -104,7 +104,7 @@ function openDrawer(skill?: Skill) {
 
 async function saveSkill() {
   let params = {}
-  try { params = JSON.parse(paramsJson.value) } catch { params = {} }
+  try { params = JSON.parse(paramsJson.value) } catch { dialog.showAlert('参数 JSON 格式无效'); return }
 
   if (editingSkill.value) {
     await skillApi.update(editingSkill.value.id, { ...form, parameters: params })

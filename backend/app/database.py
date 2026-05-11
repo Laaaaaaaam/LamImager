@@ -33,6 +33,25 @@ async def init_db():
         await conn.run_sync(Base.metadata.create_all)
 
     async with engine.begin() as conn:
+        result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='api_vendors'"))
+        if not result.fetchone():
+            await conn.execute(text("""
+                CREATE TABLE api_vendors (
+                    id VARCHAR(36) PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    base_url VARCHAR(500) NOT NULL,
+                    api_key_enc TEXT NOT NULL,
+                    is_active BOOLEAN DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+        result = await conn.execute(text("PRAGMA table_info('api_providers')"))
+        columns = [row[1] for row in result.fetchall()]
+        if "vendor_id" not in columns:
+            await conn.execute(text("ALTER TABLE api_providers ADD COLUMN vendor_id VARCHAR(36)"))
+
         result = await conn.execute(text("PRAGMA table_info('billing_records')"))
         columns = [row[1] for row in result.fetchall()]
         if "session_id" not in columns:
@@ -52,6 +71,16 @@ async def init_db():
 
         await conn.execute(text("UPDATE sessions SET status = 'idle' WHERE status != 'idle'"))
 
+        result = await conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='plan_templates'"))
+        if result.fetchone():
+            result = await conn.execute(text("PRAGMA table_info('plan_templates')"))
+            pt_columns = [row[1] for row in result.fetchall()]
+            if "builtin_version" not in pt_columns:
+                await conn.execute(text("ALTER TABLE plan_templates ADD COLUMN builtin_version INTEGER DEFAULT 0"))
+
     async with async_session() as session:
         from app.services.plan_template_service import seed_builtin_templates
         await seed_builtin_templates(session)
+
+        from app.services.api_manager import migrate_providers_to_vendors
+        await migrate_providers_to_vendors(session)

@@ -19,15 +19,16 @@ class PlanTool(Tool):
         "1. list — 列出所有可用模板，供判断是否可复用\n"
         "2. apply — 应用指定模板并填充变量，获得可执行的步骤列表\n"
         "3. create — 将当前生成的计划保存为新模板，方便以后复用\n"
-        "4. generate — 根据需求生成一个新的计划（步骤列表），不依赖已有模板"
+        "4. get_detail — 查看单个模板的完整内容（全部 steps 含 prompt/negative_prompt/checkpoint 等）\n"
+        "对于 radiate/套图模板，apply 时 variables 必须包含 items(由你自主分析用户输入拆分的子项列表，每项含 prompt，禁止使用 item 1 等占位词)、style(视觉风格)、overall_theme(主题)。"
     )
     parameters = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["list", "apply", "create"],
-                "description": "操作类型：list=列出模板, apply=应用模板, create=保存模板, generate=生成新计划",
+                "enum": ["list", "apply", "create", "get_detail"],
+                "description": "操作类型：list=列出模板, apply=应用模板, create=保存模板, get_detail=查看模板详情",
             },
             "template_id": {
                 "type": "string",
@@ -35,7 +36,7 @@ class PlanTool(Tool):
             },
             "variables": {
                 "type": "object",
-                "description": "变量键值对，action=apply时用于填充模板中的{{变量}}占位符",
+                "description": "变量键值对，action=apply时用于填充模板。radiate/套图模板必须包含 items(子项列表)、style(视觉风格)、overall_theme(主题)。重要：items 必须由你自主分析用户输入拆分，每项含 prompt 字段描述具体内容。示例: 用户要求'4张橘猫表情包' → [{prompt:'happy orange cat, chibi'},{prompt:'sad orange cat, chibi'},{prompt:'angry orange cat, chibi'},{prompt:'surprised orange cat, chibi'}]。严禁使用 item 1/item 2 等占位词",
             },
             "name": {
                 "type": "string",
@@ -80,6 +81,12 @@ class PlanTool(Tool):
         if action == "create":
             return await self._create_template(db, kwargs)
 
+        if action == "get_detail":
+            template_id = kwargs.get("template_id", "")
+            if not template_id:
+                return ToolResult(content="查看详情需要指定 template_id", meta={"error": "missing_template_id"})
+            return await self._get_detail(db, template_id)
+
         return ToolResult(content=f"未知操作: {action}", meta={"error": "unknown_action"})
 
     async def _list_templates(self, db: AsyncSession) -> ToolResult:
@@ -112,7 +119,7 @@ class PlanTool(Tool):
         if not template:
             return ToolResult(content=f"未找到模板 {template_id}，请先用 action=list 查看可用模板", meta={"error": "template_not_found"})
         try:
-            request = PlanTemplateApplyRequest(template_id=template_id, variables=variables)
+            request = PlanTemplateApplyRequest(variables=variables)
             steps = await apply_template(db, template_id, request)
             content_lines = [f"应用模板「{template.name}」，共 {len(steps)} 个步骤："]
             for i, s in enumerate(steps, 1):
@@ -163,3 +170,45 @@ class PlanTool(Tool):
             )
         except Exception as e:
             return ToolResult(content=f"创建模板失败: {e}", meta={"error": str(e)})
+
+    async def _get_detail(self, db: AsyncSession, template_id: str) -> ToolResult:
+        template = await get_template(db, template_id)
+        if not template:
+            return ToolResult(content=f"未找到模板 {template_id}", meta={"error": "template_not_found"})
+        steps_info = []
+        for i, s in enumerate(template.steps or [], 1):
+            step_info = {
+                "step": i,
+                "prompt": s.get("prompt", ""),
+                "negative_prompt": s.get("negative_prompt", ""),
+                "description": s.get("description", ""),
+                "image_count": s.get("image_count", 1),
+                "image_size": s.get("image_size", ""),
+            }
+            if s.get("checkpoint"):
+                step_info["checkpoint"] = s["checkpoint"]
+            if s.get("repeat"):
+                step_info["repeat"] = s["repeat"]
+            if s.get("role"):
+                step_info["role"] = s["role"]
+            if s.get("reference_step_indices"):
+                step_info["reference_step_indices"] = s["reference_step_indices"]
+            steps_info.append(step_info)
+        content_lines = [f"模板「{template.name}」详情 (策略={template.strategy}, 步骤={len(steps_info)}):"]
+        for si in steps_info:
+            content_lines.append(f"  {si['step']}. {si['description'] or si['prompt'][:60]}")
+            content_lines.append(f"     prompt: {si['prompt'][:120]}")
+            if si.get("checkpoint"):
+                content_lines.append(f"     checkpoint: {si['checkpoint']}")
+        return ToolResult(
+            content="\n".join(content_lines),
+            meta={
+                "template_id": template.id,
+                "name": template.name,
+                "description": template.description or "",
+                "strategy": template.strategy,
+                "is_builtin": template.is_builtin,
+                "variables": template.variables,
+                "steps": steps_info,
+            },
+        )

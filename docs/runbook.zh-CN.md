@@ -184,3 +184,25 @@ curl http://localhost:8000/api/billing/summary
 ```bash
 curl http://localhost:8000/api/providers
 ```
+
+---
+
+## 安全配置
+
+### 图片代理 SSRF 防护
+`/api/images/proxy` 端点阻止对私有 IP 的请求。如果外部图片 URL 失败:
+1. 检查 URL 是否解析到私有 IP (如 `127.0.0.1`、`10.x.x.x`、`192.168.x.x`)
+2. 仅允许 `http`/`https` 协议
+3. 响应必须是 `image/*` Content-Type
+
+### 下载路径遍历防护
+`/api/download/image` 端点严格验证文件名:
+1. 文件名仅允许字母数字、中文、点和短横线
+2. 解析后的路径必须在配置的下载目录内
+3. 如果下载返回 400 错误，检查文件名是否包含特殊字符
+
+### API 密钥加密
+1. 密钥使用 AES-256-GCM 基于机器指纹加密
+2. 迁移到新机器需要重新输入所有 API 密钥
+3. 解密错误会被记录但不会导致服务器崩溃
+4. 查看 `app/utils/crypto.py` 中的密钥派生逻辑

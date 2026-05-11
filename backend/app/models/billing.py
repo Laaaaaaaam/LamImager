@@ -1,19 +1,12 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Integer, JSON, Numeric, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
-
-
-def gen_uuid():
-    return str(uuid.uuid4())
-
-
-def now():
-    return datetime.utcnow()
+from app.models.base import gen_uuid, now
 
 
 class BillingRecordType(str, enum.Enum):

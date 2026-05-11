@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +20,7 @@ from app.services.session_manager import (
     create_session,
     delete_session,
     get_messages,
+    get_session_detail,
     list_sessions,
     message_to_response,
     update_session,
@@ -31,19 +32,20 @@ router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
 
 @router.get("/events")
-async def session_events():
+async def session_events(request: Request):
     task_manager = TaskManager()
-    queue_id, queue = await task_manager.subscribe()
+    last_event_id = request.headers.get("Last-Event-ID") or request.headers.get("last-event-id")
+    queue_id, queue = await task_manager.subscribe(session_id=None, last_event_id=last_event_id)
 
     async def event_generator():
         try:
-            yield f"data: {json.dumps({'type': 'snapshot', 'data': task_manager.get_all_tasks()})}\n\n"
+            yield f"data: {json.dumps({'type': 'snapshot', 'data': task_manager.get_all_tasks()}, ensure_ascii=False)}\n\n"
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
-                    yield f"data: {json.dumps(event)}\n\n"
+                    sse_line = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield sse_line
                 except asyncio.TimeoutError:
-                    yield f"data: {json.dumps({'type': 'ping', 'data': {}})}\n\n"
+                    yield f"data: {json.dumps({'type': 'ping', 'data': {}}, ensure_ascii=False)}\n\n"
         finally:
             task_manager.unsubscribe(queue_id)
 
@@ -53,8 +55,8 @@ async def session_events():
 @router.post("")
 async def api_create_session(data: SessionCreate = SessionCreate(), db: AsyncSession = Depends(get_db)):
     session = await create_session(db, data)
-    sessions = await list_sessions(db)
-    return [s for s in sessions if s["id"] == session.id][0]
+    detail = await get_session_detail(db, session.id)
+    return detail
 
 
 @router.get("")
@@ -64,11 +66,10 @@ async def api_list_sessions(db: AsyncSession = Depends(get_db)):
 
 @router.get("/{session_id}")
 async def api_get_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    sessions = await list_sessions(db)
-    for s in sessions:
-        if s["id"] == session_id:
-            return s
-    raise HTTPException(status_code=404, detail="Session not found")
+    detail = await get_session_detail(db, session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return detail
 
 
 @router.put("/{session_id}")
@@ -76,8 +77,8 @@ async def api_update_session(session_id: str, data: SessionUpdate, db: AsyncSess
     session = await update_session(db, session_id, data)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
-    sessions = await list_sessions(db)
-    return [s for s in sessions if s["id"] == session_id][0]
+    detail = await get_session_detail(db, session_id)
+    return detail
 
 
 @router.delete("/{session_id}")
@@ -118,7 +119,7 @@ async def api_cancel(session_id: str):
 
 
 class CheckpointRequest(BaseModel):
-    approved: bool = True
+    action: str = "approve"
     feedback: str = ""
 
 
@@ -128,9 +129,10 @@ async def api_agent_checkpoint(session_id: str, data: CheckpointRequest):
     state = task_manager.get_checkpoint_state(session_id)
     if not state:
         return {"status": "no_checkpoint"}
-    if data.approved:
-        task_manager.clear_checkpoint_state(session_id)
-        return {"status": "approved", "step": state.get("step")}
-    else:
-        task_manager.clear_checkpoint_state(session_id)
-        return {"status": "rejected", "feedback": data.feedback}
+    approved = data.action == "approve"
+    resolved = task_manager.resolve_checkpoint(session_id, approved=approved)
+    if resolved:
+        event = state.get("event")
+        step = event.payload.get("step") if event else None
+        return {"status": data.action, "step": step}
+    return {"status": "no_checkpoint"}

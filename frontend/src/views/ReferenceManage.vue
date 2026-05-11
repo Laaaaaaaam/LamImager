@@ -5,33 +5,39 @@
       <input ref="fileInput" type="file" accept="image/*,.txt,.md,.json" style="display: none" @change="handleUpload" />
     </div>
 
-    <div v-if="references.length" class="ref-grid">
-      <div v-for="r in references" :key="r.id" class="ref-card">
-        <div class="ref-image">
-          <img v-if="r.thumbnail || isImage(r.file_type)" :src="thumbnailUrl(r)" :alt="r.name" />
-          <div v-else class="ref-file-icon">{{ r.file_type }}</div>
-        </div>
-        <div class="ref-info">
-          <div class="ref-name">{{ r.name }}</div>
-          <div class="ref-meta">
-            <span v-if="r.is_global" class="badge badge-active">全局</span>
-            <span>强度: {{ r.strength }}</span>
-          </div>
-          <div class="ref-controls">
-            <label class="strength-label">
-              强度
-              <input type="range" min="0" max="1" step="0.1" :value="r.strength"
-                @change="updateStrength(r.id, ($event.target as HTMLInputElement).value)" />
-            </label>
-            <label class="toggle-label">
-              <input type="checkbox" :checked="r.is_global" @change="toggleGlobal(r)" />
-              全局
-            </label>
-          </div>
-          <button class="btn btn-sm btn-danger" @click="removeRef(r.id)">删除</button>
-        </div>
-      </div>
-    </div>
+    <table v-if="references.length" class="data-table">
+      <thead>
+        <tr>
+          <th>预览</th>
+          <th>名称</th>
+          <th>类型</th>
+          <th>强度</th>
+          <th>全局</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr v-for="r in references" :key="r.id">
+          <td>
+            <img v-if="r.thumbnail || isImage(r.file_type)" :src="thumbnailUrl(r)" :alt="r.name" class="ref-thumb" />
+            <span v-else class="ref-file-icon">{{ r.file_type }}</span>
+          </td>
+          <td>{{ r.name }}</td>
+          <td>{{ r.file_type }}</td>
+          <td>
+            <input type="range" min="0" max="1" step="0.1" :value="r.strength"
+              @change="updateStrength(r.id, ($event.target as HTMLInputElement).value)" class="strength-slider" />
+            <span class="strength-value">{{ r.strength }}</span>
+          </td>
+          <td>
+            <input type="checkbox" :checked="r.is_global" @change="toggleGlobal(r)" />
+          </td>
+          <td>
+            <button class="btn btn-sm btn-danger" @click="removeRef(r.id)">删除</button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
 
     <div v-else class="empty-state">
       <p>暂无参考图</p>
@@ -96,63 +102,26 @@ async function removeRef(id: string) {
 </script>
 
 <style scoped>
-.ref-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 16px;
-}
-.ref-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-}
-.ref-image {
-  height: 160px;
-  background: var(--hover);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.ref-image img {
-  width: 100%;
-  height: 100%;
+.ref-thumb {
+  width: 48px;
+  height: 48px;
   object-fit: cover;
+  border-radius: 4px;
 }
+
 .ref-file-icon {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--text-secondary);
 }
-.ref-info {
-  padding: 12px;
+
+.strength-slider {
+  width: 80px;
+  vertical-align: middle;
 }
-.ref-name {
-  font-weight: 500;
-  font-size: 13px;
-  margin-bottom: 4px;
-}
-.ref-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+
+.strength-value {
   font-size: 12px;
   color: var(--text-secondary);
-  margin-bottom: 8px;
-}
-.ref-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-.strength-label, .toggle-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.strength-label input[type="range"] {
-  flex: 1;
-  height: 4px;
+  margin-left: 4px;
 }
 </style>

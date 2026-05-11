@@ -14,11 +14,20 @@ const options = ref<DialogOptions>({ message: '' })
 const mode = ref<'confirm' | 'alert' | 'prompt'>('alert')
 const inputValue = ref('')
 let resolver: DialogResolve | null = null
+let dialogId = 0
 
 export function useDialog() {
   function _open(m: typeof mode.value, opts: DialogOptions): Promise<string | boolean> {
     return new Promise((resolve) => {
-      resolver = resolve as DialogResolve
+      if (resolver) {
+        resolver(null)
+      }
+      const currentId = ++dialogId
+      resolver = (value) => {
+        if (currentId === dialogId) {
+          resolve(value)
+        }
+      }
       options.value = opts
       mode.value = m
       inputValue.value = opts.inputDefault || ''
@@ -44,16 +53,19 @@ export function useDialog() {
     } else {
       resolver?.(true)
     }
+    resolver = null
     visible.value = false
   }
 
   function cancel() {
     resolver?.(mode.value === 'confirm' ? false : null)
+    resolver = null
     visible.value = false
   }
 
   function close() {
     resolver?.(null)
+    resolver = null
     visible.value = false
   }
 

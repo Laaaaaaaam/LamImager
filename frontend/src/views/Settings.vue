@@ -6,7 +6,7 @@
         <label>提示词优化模型</label>
         <select v-model="defaultModels.default_optimize_provider_id" @change="saveDefaultModels">
           <option value="">未设置</option>
-          <option v-for="p in llmProviders" :key="p.id" :value="p.id">{{ p.nickname }} ({{ p.model_id }})</option>
+          <option v-for="p in llmProviders" :key="p.id" :value="p.id">{{ p.vendor_name ? p.vendor_name + ' / ' : '' }}{{ p.nickname || p.model_id }}</option>
         </select>
         <span class="hint">用于会话中的提示词优化功能</span>
       </div>
@@ -14,7 +14,7 @@
         <label>图像生成模型</label>
         <select v-model="defaultModels.default_image_provider_id" @change="saveDefaultModels">
           <option value="">未设置</option>
-          <option v-for="p in imageProviders" :key="p.id" :value="p.id">{{ p.nickname }} ({{ p.model_id }})</option>
+          <option v-for="p in imageProviders" :key="p.id" :value="p.id">{{ p.vendor_name ? p.vendor_name + ' / ' : '' }}{{ p.nickname || p.model_id }}</option>
         </select>
         <span class="hint">用于会话中的图像生成</span>
       </div>
@@ -22,7 +22,7 @@
         <label>任务规划模型</label>
         <select v-model="defaultModels.default_plan_provider_id" @change="saveDefaultModels">
           <option value="">未设置</option>
-          <option v-for="p in llmProviders" :key="p.id" :value="p.id">{{ p.nickname }} ({{ p.model_id }})</option>
+          <option v-for="p in llmProviders" :key="p.id" :value="p.id">{{ p.vendor_name ? p.vendor_name + ' / ' : '' }}{{ p.nickname || p.model_id }}</option>
         </select>
         <span class="hint">用于会话中的任务规划功能</span>
       </div>
@@ -61,7 +61,12 @@
       <div class="form-group">
         <label>搜索重试次数</label>
         <input v-model.number="searchRetryCount" type="number" min="1" max="5" @change="saveSearchRetryCount" />
-        <span class="form-hint">Agent 搜索工具单次请求最多尝试次数</span>
+        <span class="hint">Agent 搜索工具单次请求最多尝试次数</span>
+      </div>
+      <div class="form-group">
+        <label>图片下载目录</label>
+        <input v-model="downloadDir" type="text" :placeholder="'留空则保存到: ' + defaultDownloadPath" @change="saveDownloadDir" />
+        <span class="hint">设置后图片将直接保存到此目录，不再弹出保存对话框。留空则使用默认路径</span>
       </div>
     </div>
 
@@ -88,6 +93,7 @@
 import { ref, onMounted, reactive } from 'vue'
 import { useProviderStore } from '../stores/provider'
 import { settingsApi } from '../api/settings'
+import api from '../api/client'
 import type { DefaultModelsConfig, ApiProvider } from '../types'
 import { dialog } from '../composables/useDialog'
 
@@ -110,6 +116,8 @@ const defaultModels = reactive<DefaultModelsConfig>({
   max_concurrent: 5,
 })
 const searchRetryCount = ref(3)
+const downloadDir = ref('')
+const defaultDownloadPath = ref('')
 
 onMounted(async () => {
   await providerStore.fetchProviders()
@@ -127,6 +135,14 @@ onMounted(async () => {
       const retryRes = await settingsApi.getSetting('search_retry_count')
       if (retryRes.data && retryRes.data.value != null) searchRetryCount.value = retryRes.data.value
     } catch { /* ignore */ }
+    try {
+      const dirRes = await settingsApi.getSetting('download_directory')
+      if (dirRes.data && dirRes.data.value) downloadDir.value = dirRes.data.value
+    } catch { /* ignore */ }
+    try {
+      const defRes = await api.get('/download/default-path')
+      if (defRes.data?.path) defaultDownloadPath.value = defRes.data.path
+    } catch { /* ignore */ }
   } catch { /* ignore */ }
 })
 
@@ -142,6 +158,15 @@ async function saveDefaultModels() {
 async function saveSearchRetryCount() {
   try {
     await settingsApi.setSetting('search_retry_count', { value: searchRetryCount.value })
+    showSaveMsg('已保存', 'success')
+  } catch {
+    showSaveMsg('保存失败', 'error')
+  }
+}
+
+async function saveDownloadDir() {
+  try {
+    await settingsApi.setSetting('download_directory', { value: downloadDir.value || '' })
     showSaveMsg('已保存', 'success')
   } catch {
     showSaveMsg('保存失败', 'error')

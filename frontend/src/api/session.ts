@@ -20,4 +20,7 @@ export const sessionApi = {
   generate: (data: GenerateRequest) => api.post(`/sessions/${data.session_id}/generate`, data),
 
   cancel: (id: string) => api.post(`/sessions/${id}/cancel`),
+
+  checkpoint: (id: string, action: 'approve' | 'skip' | 'reject', feedback: string = '') =>
+    api.post(`/sessions/${id}/agent/checkpoint`, { action, feedback }),
 }

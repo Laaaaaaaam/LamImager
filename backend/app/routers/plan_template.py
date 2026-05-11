@@ -35,12 +35,18 @@ async def api_get_template(template_id: str, db: AsyncSession = Depends(get_db))
 
 @router.post("", response_model=PlanTemplateResponse)
 async def api_create_template(data: PlanTemplateCreate, db: AsyncSession = Depends(get_db)):
-    return await create_template(db, data)
+    try:
+        return await create_template(db, data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.put("/{template_id}", response_model=PlanTemplateResponse)
 async def api_update_template(template_id: str, data: PlanTemplateUpdate, db: AsyncSession = Depends(get_db)):
-    template = await update_template(db, template_id, data)
+    try:
+        template = await update_template(db, template_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
     return template
@@ -56,7 +62,10 @@ async def api_delete_template(template_id: str, db: AsyncSession = Depends(get_d
 
 @router.post("/{template_id}/apply")
 async def api_apply_template(template_id: str, data: PlanTemplateApplyRequest, db: AsyncSession = Depends(get_db)):
-    steps = await apply_template(db, template_id, data)
+    try:
+        steps = await apply_template(db, template_id, data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     if steps is None:
         raise HTTPException(status_code=404, detail="Template not found")
     return {"steps": steps}

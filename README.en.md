@@ -88,16 +88,16 @@ LamImager/
 │       ├── config.py            # Settings (DATA_DIR, DB_URL, CORS)
 │       ├── database.py          # Async SQLAlchemy setup
 │       ├── models/              # SQLAlchemy models (9 tables)
-│       ├── routers/             # FastAPI routers (10 modules)
-│       ├── services/            # Business logic (11 services)
+│       ├── routers/             # FastAPI routers (11 modules)
+│       ├── services/            # Business logic (15 services)
 │       ├── schemas/             # Pydantic request/response models
 │       └── utils/               # crypto, llm_client, image_client
 ├── frontend/
 │   └── src/
 │       ├── views/               # 8 page components (Sessions.vue is main)
-│       ├── api/                 # Axios API clients (11 modules)
+│       ├── api/                 # Axios API clients (12 modules)
 │       ├── stores/              # Pinia stores (provider, billing, session)
-│       ├── composables/         # Reusable composables
+│       ├── composables/         # Reusable composables (useSessionEvents, useDialog, useMarkdown, useDownload)
 │       └── types/               # TypeScript interfaces
 ├── desktop/                     # Desktop app (PyInstaller + pywebview)
 ├── docs/                        # Architecture, API reference, runbook

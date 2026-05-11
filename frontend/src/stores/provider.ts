@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { providerApi } from '../api/apiProvider'
-import type { ApiProvider, ApiProviderCreate, ApiProviderUpdate } from '../types'
+import { providerApi, vendorApi } from '../api/apiProvider'
+import type { ApiProvider, ApiProviderCreate, ApiProviderUpdate, ApiVendor, ApiVendorCreate, ApiVendorUpdate } from '../types'
 
 export const useProviderStore = defineStore('provider', () => {
   const providers = ref<ApiProvider[]>([])
+  const vendors = ref<ApiVendor[]>([])
   const loading = ref(false)
   const currentProvider = ref<ApiProvider | null>(null)
 
@@ -63,5 +64,44 @@ export const useProviderStore = defineStore('provider', () => {
     }
   }
 
-  return { providers, loading, currentProvider, fetchProviders, createProvider, updateProvider, deleteProvider, testConnection }
+  async function fetchVendors() {
+    loading.value = true
+    try {
+      const { data } = await vendorApi.list()
+      vendors.value = data
+    } catch (e) {
+      console.error('Failed to fetch vendors:', e)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function createVendor(data: ApiVendorCreate) {
+    const { data: result } = await vendorApi.create(data)
+    vendors.value.unshift(result)
+    return result
+  }
+
+  async function updateVendor(id: string, data: ApiVendorUpdate) {
+    const { data: result } = await vendorApi.update(id, data)
+    const idx = vendors.value.findIndex((v) => v.id === id)
+    if (idx !== -1) vendors.value[idx] = result
+    return result
+  }
+
+  async function deleteVendor(id: string) {
+    await vendorApi.delete(id)
+    vendors.value = vendors.value.filter((v) => v.id !== id)
+  }
+
+  async function testVendor(id: string) {
+    const { data } = await vendorApi.test(id)
+    return data
+  }
+
+  return {
+    providers, vendors, loading, currentProvider,
+    fetchProviders, createProvider, updateProvider, deleteProvider, testConnection,
+    fetchVendors, createVendor, updateVendor, deleteVendor, testVendor,
+  }
 })

@@ -122,7 +122,7 @@ POST /api/sessions/{id}/messages
 }
 ```
 
-消息类型: `text` | `image` | `optimization` | `plan` | `skill` | `error`
+消息类型: `text` | `image` | `optimization` | `plan` | `skill` | `error` | `agent`
 
 规划消息的 metadata:
 ```json
@@ -167,9 +167,14 @@ POST /api/sessions/{id}/generate
   "reference_images": ["data:image/png;base64,..."],
   "reference_labels": [{"index": 1, "source": "upload", "name": "photoA.png"}],
   "context_messages": [{"role": "user", "content": "...", "image_urls": ["http://localhost:8000/api/images/xxx.png"]}],
-  "plan_strategy": "parallel"
+  "plan_strategy": "parallel",
+  "agent_mode": false,
+  "agent_tools": ["web_search", "image_search", "generate_image", "plan"],
+  "agent_plan_strategy": ""
 }
 ```
+
+> **注意**: `agent_plan_strategy` 已弃用 — 后端现在根据意图解析自动决定策略。该字段仍被接受但会被忽略。
 
 响应: `Message` (包含生成图片的助手消息)
 
@@ -179,6 +184,40 @@ POST /api/sessions/{id}/generate
 > 3. Vision LLM 视觉描述 → `POST /v1/images/generations` (纯文字兜底)
 >
 > **多模态上下文**: `context_messages` 可包含 `image_urls` 用于 LLM 视觉上下文。存在时后端通过 `_build_multimodal_context()` 构建多模态消息。
+>
+> **Agent 模式**: 当 `agent_mode` 为 `true` 时，端点委托给 `handle_agent_generate`，使用指定的 `agent_tools` 调用 `AgentLoop`。可用工具: `web_search`、`image_search`、`generate_image`、`plan`。LLM 自主决定工具调用顺序。
+
+### 取消 Agent 任务
+```
+POST /api/sessions/{id}/cancel
+```
+取消正在进行的 Agent 任务。通过每会话 `asyncio.Event` 实现，Agent 循环在轮次间检查。
+
+响应: `{"message": "Cancelled"}`
+
+### Agent Checkpoint
+```
+POST /api/sessions/{id}/agent/checkpoint
+```
+批准或拒绝 Agent 检查点 (如锚点网格质量检查)。Checkpoint 在 300 秒超时后自动拒绝。
+
+请求体:
+```json
+{
+  "action": "approve",
+  "feedback": ""
+}
+```
+
+`action` 值: `"approve"` (继续) | `"reject"` (中止)。非 approve 值均视为拒绝。
+
+响应:
+```json
+{
+  "status": "approved",
+  "step": "anchor_grid"
+}
+```
 
 ---
 
@@ -218,6 +257,35 @@ PUT /api/settings/default-models
 }
 ```
 
+### 获取任意设置
+```
+GET /api/settings/{key}
+```
+
+支持的键: `search_retry_count`, `download_directory`
+
+响应:
+```json
+{
+  "key": "download_directory",
+  "value": {
+    "value": "D:\\Downloads\\images"
+  }
+}
+```
+
+### 设置任意设置
+```
+PUT /api/settings/{key}
+```
+
+请求体:
+```json
+{
+  "value": "D:\\Downloads\\images"
+}
+```
+
 ---
 
 ## 提供商
@@ -228,7 +296,7 @@ GET /api/providers
 ```
 
 查询参数:
-- `provider_type` (可选): `image_gen` | `llm`
+- `provider_type` (可选): `image_gen` | `llm` | `web_search`
 
 响应: `ApiProvider[]`
 
@@ -448,7 +516,7 @@ GET /api/billing/breakdown
 }
 ```
 
-操作类型: `image_gen` | `optimize` | `assistant` | `plan` | `vision`
+操作类型: `image_gen` | `optimize` | `assistant` | `plan` | `vision` | `agent` | `tool`
 
 ---
 
@@ -559,7 +627,7 @@ Content-Type: `text/event-stream` (SSE)
 
 `stream_type`: `"assistant"` (默认) 用于通用聊天及计费分类。
 
-`agent_tools` (可选): LLM 可调用的工具列表。支持 `web_search`、`image_search`。启用后响应流中会包含 `tool_call` / `tool_result` 事件。
+`agent_tools` (可选): LLM 可调用的工具列表。支持 `web_search`、`image_search`、`generate_image`、`plan`。启用后响应流中会包含 `tool_call` / `tool_result` 事件。
 
 SSE 事件:
 - `data: {"token": "词"}` - 每个生成的 token
@@ -581,6 +649,8 @@ GET /api/images/proxy?url=<encoded_url>
 ```
 
 服务端图片代理，避免 CORS 问题。前端在迭代精修时获取前一步输出图片时使用。
+
+安全: 仅允许 `http`/`https` URL。DNS 解析阻止私有/回环 IP。响应 Content-Type 必须为 `image/*`。
 
 ---
 
@@ -644,6 +714,42 @@ GET /api/dashboard/stats
   "monthly_cost": 12.34
 }
 ```
+
+---
+
+## 下载
+
+### 下载图片到指定目录
+```
+POST /api/download/image
+```
+
+将图片从 URL 保存到配置的下载目录。需要先通过 `PUT /api/settings/download_directory` 设置 `download_directory`。
+
+安全: 文件名通过白名单正则 `^[\w\u4e00-\u9fff.\-]+$` 验证。解析后的路径必须在下载目录内 (路径遍历防护)。
+
+请求体:
+```json
+{
+  "url": "https://example.com/image.png",
+  "filename": "image.png"
+}
+```
+
+文件已存在时自动追加编号: `image (1).png`, `image (2).png`。
+
+响应:
+```json
+{
+  "success": true,
+  "path": "D:\\Downloads\\images\\image.png",
+  "size": 123456
+}
+```
+
+错误:
+- `400` — 下载目录未配置或路径不存在
+- `502` — 从源 URL 下载失败
 
 ---
 

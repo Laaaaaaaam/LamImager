@@ -48,6 +48,9 @@
         </div>
         <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role">
           <div class="message-content" :class="msg.message_type">
+            <button class="msg-copy-btn" @click="copyMessageContent(msg)" title="复制">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            </button>
             <template v-if="msg.message_type === 'text'">
               <div v-html="renderMarkdown(msg.content)"></div>
             </template>
@@ -102,7 +105,7 @@
                   </div>
                 </div>
                 <div class="plan-card-body" v-if="expandedPlanIds.has(msg.id) && msg.metadata?.steps">
-                  <div v-for="(step: any, i: number) in (msg.metadata.steps as any[])" :key="i" class="plan-card-step">
+                  <div v-for="(step, i) in (msg.metadata.steps as any[])" :key="i" class="plan-card-step">
                     <div class="plan-step-header">
                       <span class="step-num">{{ i + 1 }}</span>
                       <span class="step-prompt-preview">{{ step.description || step.prompt.slice(0, 80) }}{{ (!step.description && step.prompt.length > 80) ? '...' : '' }}</span>
@@ -130,13 +133,41 @@
                   <span class="agent-badge">Agent</span>
                   <span class="agent-cost" v-if="msg.metadata?.cost">费用 ¥{{ (msg.metadata.cost as number)?.toFixed(4) }}</span>
                 </div>
-                <div v-if="msg.metadata?.steps && (msg.metadata.steps as any[]).length" class="agent-steps">
-                  <div v-for="(step: any, si: number) in msg.metadata.steps" :key="si" class="agent-step">
-                    <span class="agent-step-icon">{{ step.type === 'tool_call' ? '>' : step.type === 'tool_result' ? '<' : 'i' }}</span>
-                    <span class="agent-step-name">{{ step.name }}</span>
+                <div class="agent-card-content" v-html="renderMarkdown(msg.content)"></div>
+                <div class="agent-card-images" v-if="msg.metadata?.images && (msg.metadata.images as any[]).length">
+                  <img
+                    v-for="(url, i) in (msg.metadata.images as any[])"
+                    :key="i"
+                    :src="url"
+                    class="agent-card-thumb"
+                    @click="openImage(url)"
+                  />
+                </div>
+                <div v-if="msg.metadata?.steps && (msg.metadata.steps as any[]).length" class="agent-steps-v2">
+                  <div
+                    v-for="(step, si) in msg.metadata.steps"
+                    :key="si"
+                    class="step-card"
+                    :class="{ expanded: expandedStepIds.has(msg.id + '-' + si) }"
+                    @click="expandedStepIds.has(msg.id + '-' + si) ? expandedStepIds.delete(msg.id + '-' + si) : expandedStepIds.add(msg.id + '-' + si)"
+                  >
+                    <div class="step-card-row">
+                      <span class="step-card-icon">{{ stepIcon(step) }}</span>
+                      <span class="step-card-name">{{ step.name }}</span>
+                      <span class="step-card-detail" v-if="step.args?.count > 1">×{{ step.args.count }}</span>
+                      <span class="step-card-result" v-if="step.type === 'tool_result'">
+                        <template v-if="step.meta?.image_urls">· {{ (step.meta.image_urls as any[]).length }}张</template>
+                        <template v-else>✓</template>
+                      </span>
+                    </div>
+                    <div class="step-card-body" v-if="expandedStepIds.has(msg.id + '-' + si) && (step.content || step.args)">
+                      <div v-if="step.args" class="step-card-args">
+                        <span v-for="(v, k) in step.args" :key="k" class="step-arg">{{ k }}: {{ typeof v === 'object' ? JSON.stringify(v) : v }}</span>
+                      </div>
+                      <div v-if="step.content" class="step-card-content">{{ step.content }}</div>
+                    </div>
                   </div>
                 </div>
-                <div class="agent-card-content" v-html="renderMarkdown(msg.content)"></div>
               </div>
             </template>
             <template v-else>
@@ -145,14 +176,23 @@
           </div>
         </div>
         <div v-if="currentSessionId && isSessionBusy(currentSessionId)" class="message assistant">
-          <div class="message-content generating">
+          <div class="message-content generating" v-if="!agentStreamState || agentStreamState.status === 'done'">
             <div class="generating-indicator">
               <span class="dot"></span>
               <span class="dot"></span>
               <span class="dot"></span>
             </div>
             <span class="generating-text">{{ generatingText }}</span>
+            <span v-if="currentTaskLabel" class="task-type-badge">{{ currentTaskLabel }}</span>
+            <span class="task-progress" v-if="getTaskProgress(currentSessionId)">
+              {{ getTaskProgress(currentSessionId) }}
+            </span>
           </div>
+          <AgentStreamCard
+            v-if="agentStreamState && agentStreamState.status !== 'done'"
+            :state="agentStreamState"
+            @cancel="cancelAgent"
+          />
         </div>
       </div>
 
@@ -182,7 +222,14 @@
         </div>
       </div>
 
-      <div class="input-area">
+      <div class="input-area" :class="{ 'drag-over': isDragOverMain }"
+           @dragenter.prevent="onDragEnterMain"
+           @dragover.prevent="onDragOverMain"
+           @dragleave.prevent="onDragLeaveMain"
+           @drop.prevent="onDropMain">
+        <div v-if="isDragOverMain" class="drag-overlay">
+          <span class="drag-overlay-text">释放以添加图片或文档</span>
+        </div>
         <div class="refine-header" v-if="isRefineMode">
           <span class="refine-label">精修模式</span>
           <button class="btn btn-sm" @click="exitRefineMode">退出精修</button>
@@ -219,7 +266,7 @@
           />
         </div>
           <div class="input-controls">
-          <div v-if="!agentMode" class="input-options">
+          <div class="input-options">
             <label class="upload-btn" title="上传图片">
               <input type="file" accept="image/*" multiple @change="handleFileUpload($event, 'image')" hidden />
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -228,6 +275,8 @@
               <input type="file" accept=".txt,.md,.pdf,.doc,.docx" multiple @change="handleFileUpload($event, 'doc')" hidden />
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
             </label>
+          </div>
+          <div v-if="!agentMode" class="input-options">
             <span class="option-label">数量:</span>
             <button
               v-for="n in [1, 2, 4, 8]" :key="n"
@@ -375,7 +424,14 @@
             <button class="btn btn-sm" @click="saveDialogHistory" :disabled="!dialogMessages.length">保存对话</button>
             <button class="btn btn-sm" @click="clearDialog" :disabled="!dialogMessages.length">清除对话</button>
           </div>
-          <div class="dialog-input-area">
+          <div class="dialog-input-area" :class="{ 'drag-over': isDragOverDialog }"
+               @dragenter.prevent="onDragEnterDialog"
+               @dragover.prevent="onDragOverDialog"
+               @dragleave.prevent="onDragLeaveDialog"
+               @drop.prevent="onDropDialog">
+            <div v-if="isDragOverDialog" class="drag-overlay dialog-drag-overlay">
+              <span class="drag-overlay-text">释放以添加文件</span>
+            </div>
             <div class="dialog-attachment-preview" v-if="dialogAttachments.length">
               <div v-for="(file, i) in dialogAttachments" :key="i" class="dialog-attachment-item">
                 <img v-if="file.type.startsWith('image/')" :src="file.preview" class="dialog-attachment-thumb" />
@@ -458,16 +514,6 @@
             </div>
             <button class="btn btn-sm" @click="applyTemplateVariables">应用变量</button>
           </div>
-          <div class="plan-strategy">
-            <p class="section-title">执行策略</p>
-            <div class="strategy-options">
-              <label v-for="s in planStrategies" :key="s.key" class="strategy-label">
-                <input type="radio" :value="s.key" v-model="selectedPlanStrategy" />
-                <span>{{ s.label }}</span>
-                <span class="strategy-desc">{{ s.desc }}</span>
-              </label>
-            </div>
-          </div>
           <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px" @click="doPlan" :disabled="!inputText.trim() || planning">
             {{ planning ? '规划中...' : '生成规划' }}
           </button>
@@ -541,6 +587,16 @@
       </div>
     </div>
 
+    <CheckpointOverlay
+      :visible="agentCheckpointState.visible"
+      :message="agentCheckpointState.message"
+      :tool-name="agentCheckpointState.toolName"
+      :preview-url="agentCheckpointState.previewUrl"
+      @approve="resolveAgentCheckpoint(true)"
+      @reject="resolveAgentCheckpoint(false)"
+      @skip="resolveAgentCheckpoint(true)"
+    />
+
     <div v-if="contextMenu.show" class="context-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }">
       <button @click="renameSession(contextMenu.sessionId!)">重命名</button>
       <button @click="deleteSession(contextMenu.sessionId!)">删除</button>
@@ -561,9 +617,11 @@ import { promptApi } from '../api/prompt'
 import { settingsApi } from '../api/settings'
 import { sessionApi } from '../api/session'
 import { useBillingStore } from '../stores/billing'
-import type { Skill, DefaultModelsConfig, TaskHandle, TaskUpdateEvent, PlanStep, PlanTemplate, TemplateVariable } from '../types'
+import type { Skill, DefaultModelsConfig, TaskHandle, TaskUpdateEvent, PlanStep, PlanTemplate, TemplateVariable, AgentStreamState, LamEvent } from '../types'
 import { dialog } from '../composables/useDialog'
 import { useSessionEvents } from '../composables/useSessionEvents'
+import AgentStreamCard from '../components/session/AgentStreamCard.vue'
+import CheckpointOverlay from '../components/session/CheckpointOverlay.vue'
 import { planTemplateApi } from '../api/planTemplate'
 
 const store = useSessionStore()
@@ -575,10 +633,38 @@ const messages = computed(() => store.messages)
 
 const inputText = ref('')
 const agentMode = ref(false)
+const agentStreamState = ref<AgentStreamState | null>(null)
+const expandedStepIds = ref(new Set<string>())
+const agentCheckpointState = ref<{ visible: boolean; message: string; toolName?: string; previewUrl?: string; correlationId?: string }>({
+  visible: false,
+  message: '',
+})
 const negativePrompt = ref('')
 const imageCount = ref(1)
 const customCount = ref(false)
 const customCountInput = ref<HTMLInputElement | null>(null)
+
+function downloadOne(url: string) {
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'image.png'
+  a.target = '_blank'
+  a.click()
+}
+
+function downloadAll(urls: string[]) {
+  urls.forEach((url) => {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'image.png'
+    a.target = '_blank'
+    a.click()
+  })
+}
+
+function downloadSelected() {
+  downloadAll(selectedImages.value)
+}
 
 function setCount(n: number) {
   imageCount.value = n
@@ -670,6 +756,11 @@ interface Attachment {
 const attachments = ref<Attachment[]>([])
 const dialogAttachments = ref<Attachment[]>([])
 
+const dragCounterMain = ref(0)
+const dragCounterDialog = ref(0)
+const isDragOverMain = computed(() => dragCounterMain.value > 0)
+const isDragOverDialog = computed(() => dragCounterDialog.value > 0)
+
 const assistantTabs = [
   { key: 'dialog', label: '对话' },
   { key: 'optimize', label: '优化' },
@@ -698,6 +789,7 @@ const dialogContainer = ref<HTMLElement | null>(null)
 const responseStyle = ref<'default' | 'verbose' | 'concise'>('default')
 const showDialogSettings = ref(false)
 const searchEnabled = ref(false)
+const dialogToolCalls = ref<{ id: string; name: string; args: any; content: string; collapsed: boolean }[]>([])
 
 const optimizeDirections = [
   { key: 'detail_enhancement', label: '细节增强', desc: '提升画面细节与清晰度' },
@@ -793,16 +885,46 @@ function getTaskProgress(sessionId: string): string {
   return `${task.progress}/${task.total}`
 }
 
+function stepIcon(step: any): string {
+  const icons: Record<string, string> = {
+    web_search: '搜',
+    image_search: '图',
+    generate_image: '画',
+    plan: '策',
+  }
+  return icons[step.name] || '○'
+}
+
+const TASK_TYPE_LABELS: Record<string, string> = {
+  single: '单图生成',
+  multi_independent: '多图并行',
+  iterative: '迭代精修',
+  radiate: '套图辐射',
+}
+
+const currentTaskLabel = computed(() => {
+  if (!currentSessionId.value) return ''
+  const task = activeTasks.value.get(currentSessionId.value)
+  if (!task || task.status !== 'running') return ''
+  if (task.taskType) return TASK_TYPE_LABELS[task.taskType] || task.taskType
+  return ''
+})
+
 const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvents(
   (event: TaskUpdateEvent) => {
     const task = activeTasks.value.get(event.session_id)
     if (task) {
       task.progress = event.progress
       task.total = event.total
+      if (event.task_type) task.taskType = event.task_type
+      if (event.strategy) task.strategy = event.strategy
       if (event.status === 'idle' || event.status === 'error') {
         task.status = event.status === 'error' ? 'error' : 'done'
         setTimeout(() => activeTasks.value.delete(event.session_id), 3000)
       }
+    }
+    if (event.message) {
+      generatingText.value = event.message
     }
     store.fetchSessions()
   },
@@ -817,6 +939,73 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
           total: info.total,
           abortController: null,
         })
+      }
+    }
+  },
+  (event: LamEvent) => {
+    if (event.event_type === 'task_started' && event.payload.type === 'task_started') {
+      const sid = event.payload.session_id
+      agentStreamState.value = {
+        sessionId: sid,
+        status: 'thinking',
+        content: '',
+        steps: [],
+        cost: null,
+      }
+      store.setAgentStream(sid, agentStreamState.value)
+      return
+    }
+    if (agentStreamState.value) {
+      const sid = agentStreamState.value.sessionId
+      if (event.payload.session_id !== sid) return
+      const state = { ...agentStreamState.value, steps: [...agentStreamState.value.steps] }
+      switch (event.payload.type) {
+        case 'agent_token':
+          state.content += event.payload.content || ''
+          state.status = 'thinking'
+          break
+        case 'agent_tool_call':
+          state.steps.push({
+            id: event.event_id,
+            type: 'tool_call',
+            name: event.payload.name || '',
+            status: 'running',
+            args: event.payload.args,
+          })
+          state.status = 'tool_running'
+          break
+        case 'agent_tool_result': {
+          const step = [...state.steps].reverse().find(s => s.name === event.payload.name && s.status === 'running')
+          if (step) {
+            step.status = 'done'
+            step.content = event.payload.content
+            step.meta = event.payload.meta
+          }
+          state.status = 'thinking'
+          break
+        }
+        case 'agent_done':
+          state.status = 'done'
+          state.cost = event.payload.cost || null
+          break
+        case 'agent_error':
+          state.status = 'error'
+          break
+        case 'agent_cancelled':
+          state.status = 'done'
+          state.content += '\n\n[已取消]'
+          break
+      }
+      agentStreamState.value = state
+      store.setAgentStream(sid, state)
+    }
+    if (event.event_type === 'checkpoint_required' && event.payload.type === 'agent_checkpoint') {
+      agentCheckpointState.value = {
+        visible: true,
+        message: event.payload.message || '确认执行',
+        toolName: event.payload.tool_name,
+        previewUrl: event.payload.preview,
+        correlationId: event.payload.session_id,
       }
     }
   },
@@ -893,51 +1082,89 @@ function formatTokens(tokens: number) {
   return tokens + ' tok'
 }
 
-async function handleFileUpload(event: Event, type: 'image' | 'doc') {
+async function handleFileUpload(event: Event, _type: 'image' | 'doc') {
   const input = event.target as HTMLInputElement
   if (!input.files) return
-  
-  for (const file of input.files) {
-    const attachment: Attachment = {
-      name: file.name,
-      type: file.type,
-      size: file.size,
-    }
-    
-    if (file.type.startsWith('image/')) {
-      attachment.preview = await readFileAsDataURL(file)
-      addContextImage(attachment.preview, 'upload', file.name, attachment.preview)
-    } else {
-      attachment.content = await readFileAsText(file)
-    }
-    
-    attachments.value.push(attachment)
-  }
-  
+  await processMainFiles(input.files)
   input.value = ''
 }
 
 async function handleDialogFileUpload(event: Event) {
   const input = event.target as HTMLInputElement
   if (!input.files) return
-  
-  for (const file of input.files) {
+  await processDialogFiles(input.files)
+  input.value = ''
+}
+
+function onDragEnterMain(_e: DragEvent) {
+  dragCounterMain.value++
+}
+
+function onDragOverMain(e: DragEvent) {
+  e.dataTransfer!.dropEffect = 'copy'
+}
+
+function onDragLeaveMain(_e: DragEvent) {
+  dragCounterMain.value--
+}
+
+async function onDropMain(e: DragEvent) {
+  dragCounterMain.value = 0
+  const files = e.dataTransfer?.files
+  if (!files || !files.length) return
+  await processMainFiles(files)
+}
+
+async function processMainFiles(files: FileList) {
+  for (const file of files) {
     const attachment: Attachment = {
       name: file.name,
       type: file.type,
       size: file.size,
     }
-    
     if (file.type.startsWith('image/')) {
       attachment.preview = await readFileAsDataURL(file)
-    } else {
+      addContextImage(attachment.preview, 'upload', file.name, attachment.preview)
+    } else if (file.name.match(/\.(txt|md|pdf|doc|docx)$/i) || file.type === 'text/plain') {
       attachment.content = await readFileAsText(file)
     }
-    
+    attachments.value.push(attachment)
+  }
+}
+
+function onDragEnterDialog(_e: DragEvent) {
+  dragCounterDialog.value++
+}
+
+function onDragOverDialog(e: DragEvent) {
+  e.dataTransfer!.dropEffect = 'copy'
+}
+
+function onDragLeaveDialog(_e: DragEvent) {
+  dragCounterDialog.value--
+}
+
+async function onDropDialog(e: DragEvent) {
+  dragCounterDialog.value = 0
+  const files = e.dataTransfer?.files
+  if (!files || !files.length) return
+  await processDialogFiles(files)
+}
+
+async function processDialogFiles(files: FileList) {
+  for (const file of files) {
+    const attachment: Attachment = {
+      name: file.name,
+      type: file.type,
+      size: file.size,
+    }
+    if (file.type.startsWith('image/')) {
+      attachment.preview = await readFileAsDataURL(file)
+    } else if (file.name.match(/\.(txt|md)$/i) || file.type === 'text/plain') {
+      attachment.content = await readFileAsText(file)
+    }
     dialogAttachments.value.push(attachment)
   }
-  
-  input.value = ''
 }
 
 function readFileAsDataURL(file: File): Promise<string> {
@@ -983,6 +1210,38 @@ function copyToClipboard(text: string) {
     document.execCommand('copy')
     document.body.removeChild(textarea)
   })
+}
+
+interface MsgLike {
+  content: string
+  message_type?: string
+  metadata?: Record<string, unknown>
+}
+
+function getMessageCopyText(msg: MsgLike): string {
+  let text = msg.content || ''
+  const meta = msg.metadata
+  if (!meta) return text
+
+  if (msg.message_type === 'image' && Array.isArray(meta.image_urls) && meta.image_urls.length) {
+    text += '\n\n' + (meta.image_urls as string[]).map((u, i) => `[图${i + 1}] ${u}`).join('\n')
+  }
+  if (msg.message_type === 'optimization') {
+    if (meta.original) text += `\n\n原始:\n${meta.original}`
+    if (meta.optimized) text += `\n\n优化后:\n${meta.optimized}`
+  }
+  if ((msg.message_type === 'plan' || msg.message_type === 'agent') && Array.isArray(meta.steps)) {
+    const steps = (meta.steps as Array<Record<string, unknown>>).map((s, i) => {
+      const desc = (s.description || s.prompt || s.name || '') as string
+      return `${i + 1}. ${desc}${s.content ? ': ' + s.content : ''}`
+    }).join('\n')
+    text += '\n\n' + steps
+  }
+  return text
+}
+
+function copyMessageContent(msg: MsgLike) {
+  copyToClipboard(getMessageCopyText(msg))
 }
 
 function renderMarkdown(text: string): string {
@@ -1102,6 +1361,20 @@ async function cancelAgent() {
   }
 }
 
+async function resolveAgentCheckpoint(approved: boolean) {
+  const sid = agentCheckpointState.value.correlationId
+  if (!sid) {
+    agentCheckpointState.value.visible = false
+    return
+  }
+  try {
+    await sessionApi.checkpoint(sid, approved)
+  } catch (e: any) {
+    console.error('Checkpoint resolve failed:', e)
+  }
+  agentCheckpointState.value.visible = false
+}
+
 async function sendGenerate() {
   if (!inputText.value.trim() && !contextImageList.value.length) return
   const sid = currentSessionId.value
@@ -1116,7 +1389,7 @@ async function sendGenerate() {
     total: imageCount.value,
     abortController,
   })
-  generatingText.value = '生成中...'
+  generatingText.value = agentMode.value ? 'Agent 分析中...' : '生成中...'
 
   let promptWithContext = inputText.value
   const referenceImages: string[] = []
@@ -1192,7 +1465,6 @@ async function sendGenerate() {
     if (agentMode.value) {
       generateData.agent_mode = true
       generateData.agent_tools = ['web_search', 'image_search']
-      generateData.agent_plan_strategy = selectedPlanStrategy.value || 'parallel'
     }
 
     await store.generate(sid, generateData)
@@ -1232,30 +1504,8 @@ function openImage(url: string) {
   lightboxUrl.value = url
 }
 
-function downloadOne(url: string) {
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'image.png'
-  a.target = '_blank'
-  a.click()
-}
-
 function openInNewTab(url: string) {
   window.open(url, '_blank')
-}
-
-function downloadAll(urls: string[]) {
-  urls.forEach((url) => {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = 'image.png'
-    a.target = '_blank'
-    a.click()
-  })
-}
-
-function downloadSelected() {
-  downloadAll(selectedImages.value)
 }
 
 function compareSelected() {
@@ -2030,6 +2280,10 @@ watch(selectedSkillIds, (ids) => {
   margin-bottom: 12px;
 }
 
+.message-content {
+  position: relative;
+}
+
 .message.user {
   display: flex;
   justify-content: flex-end;
@@ -2046,6 +2300,35 @@ watch(selectedSkillIds, (ids) => {
 .message.assistant .message-content,
 .message.system .message-content {
   max-width: 85%;
+}
+
+.msg-copy-btn {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--text-secondary);
+  z-index: 5;
+}
+
+.message-content:hover .msg-copy-btn {
+  opacity: 0.7;
+}
+
+.msg-copy-btn:hover {
+  opacity: 1 !important;
+  background: var(--hover);
+  color: var(--text);
 }
 
 .message.assistant p,
@@ -2354,29 +2637,117 @@ watch(selectedSkillIds, (ids) => {
   color: var(--text-secondary);
 }
 
-.agent-steps {
-  margin-bottom: 8px;
+.agent-steps-v2 {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 12px;
 }
 
-.agent-step {
+.step-card {
+  background: var(--bg, #fafafa);
+  border: 1px solid var(--border, #e5e5e5);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.step-card:hover {
+  border-color: var(--accent, #000);
+}
+.step-card.expanded {
+  border-color: var(--accent, #000);
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+.step-card-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 0;
+  gap: 8px;
+  padding: 8px 12px;
   font-size: 12px;
-  color: var(--text-secondary);
 }
 
-.agent-step-icon {
+.step-card-icon {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent, #000);
+  color: #fff;
+  border-radius: 4px;
   font-size: 10px;
-  width: 16px;
-  text-align: center;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.step-card-name {
+  font-weight: 600;
+  color: #333;
+}
+
+.step-card-detail {
+  color: var(--text-secondary, #888);
+  font-size: 11px;
+}
+
+.step-card-result {
+  margin-left: auto;
+  color: var(--text-secondary, #888);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.step-card-body {
+  padding: 0 12px 10px 40px;
+  font-size: 12px;
+  color: var(--text-secondary, #666);
+  line-height: 1.5;
+  border-top: 1px solid var(--border, #e5e5e5);
+}
+
+.step-card-args {
+  margin-bottom: 4px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.step-arg {
+  background: #eee;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: monospace;
+}
+
+.step-card-content {
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .agent-card-content {
   font-size: 13px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.agent-card-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.agent-card-thumb {
+  width: 120px;
+  height: 120px;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border, #e5e5e5);
+  cursor: pointer;
 }
 
 .attachment-preview {
@@ -2601,6 +2972,18 @@ watch(selectedSkillIds, (ids) => {
   color: var(--text-secondary);
 }
 
+.task-type-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: #000;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
 .compare-overlay {
   position: fixed;
   top: 0;
@@ -2699,6 +3082,32 @@ watch(selectedSkillIds, (ids) => {
   border-top: 1px solid var(--border);
   padding: 12px 16px;
   background: var(--card);
+  position: relative;
+}
+
+.input-area.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.drag-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.05);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.drag-overlay-text {
+  font-size: 14px;
+  color: var(--accent);
+}
+
+.dialog-drag-overlay {
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .input-main {
@@ -2897,6 +3306,7 @@ watch(selectedSkillIds, (ids) => {
 .assistant-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px;
   display: flex;
   flex-direction: column;
@@ -2981,6 +3391,7 @@ watch(selectedSkillIds, (ids) => {
 .dialog-messages {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   margin-bottom: 12px;
   min-height: 100px;
 }
@@ -3118,6 +3529,12 @@ watch(selectedSkillIds, (ids) => {
   padding-top: 8px;
   border-top: 1px solid var(--border);
   margin-top: auto;
+  position: relative;
+}
+
+.dialog-input-area.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
 }
 
 .dialog-attachment-preview {
@@ -3564,5 +3981,148 @@ watch(selectedSkillIds, (ids) => {
 
 .context-menu button:hover {
   background: var(--hover);
+}
+
+.download-progress-card {
+  position: fixed;
+  bottom: 100px;
+  right: 24px;
+  width: 320px;
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 99;
+  padding: 12px;
+}
+
+.download-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.download-progress-close {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  cursor: pointer;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.download-progress-close:hover {
+  background: var(--hover);
+}
+
+.download-progress-item {
+  margin-bottom: 10px;
+}
+
+.download-progress-item:last-child {
+  margin-bottom: 0;
+}
+
+.download-progress-filename {
+  display: block;
+  font-size: 12px;
+  color: var(--text);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.download-progress-status {
+  font-size: 10px;
+  margin-left: 6px;
+}
+
+.download-progress-status.done {
+  color: var(--success);
+}
+
+.download-progress-status.error {
+  color: var(--danger);
+}
+
+.download-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: var(--hover);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.download-progress-fill {
+  height: 100%;
+  background: var(--text);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.download-progress-fill.done {
+  background: var(--success);
+}
+
+.download-progress-fill.error {
+  background: var(--danger);
+}
+
+.download-progress-fill.indeterminate {
+  width: 40% !important;
+  animation: downloadIndeterminate 1.4s ease-in-out infinite;
+}
+
+@keyframes downloadIndeterminate {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
+.download-progress-error {
+  display: block;
+  font-size: 10px;
+  color: var(--danger);
+  margin-top: 2px;
+}
+
+.download-progress-url {
+  display: block;
+  font-size: 9px;
+  color: var(--text-secondary);
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.download-toast {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  padding: 8px 16px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  z-index: 100;
+}
+
+.download-toast.success {
+  background: #E8F5E9;
+  color: var(--success);
+}
+
+.download-toast.error {
+  background: #FFEBEE;
+  color: var(--danger);
 }
 </style>

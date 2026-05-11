@@ -1,0 +1,743 @@
+# LamImager 详细架构图
+
+## 架构总览
+
+```mermaid
+graph TB
+    subgraph FRONTEND["前端层 Vue3 + TypeScript + Pinia"]
+        direction TB
+
+        subgraph F_VIEWS["视图层 Views (8个页面)"]
+            direction LR
+            FRouter["router/index.ts<br/>8条SPA路由<br/>/: sessions, /dashboard<br/>/api-manage, /skills<br/>/rules, /references<br/>/plan-templates, /settings"]
+            Sessions["Sessions.vue<br/>核心会话页<br/>三栏布局: 会话列表|聊天区|助手侧栏<br/>状态: inputText, agentMode, imageCount<br/>imageWidth/Height, negativePrompt<br/>showAssistant, assistantTab<br/>selectedImages, comparingImages<br/>isRefineMode, contextImageList<br/>activeTasks, dialogMessages<br/>responseStyle, contextMode<br/>memoryMode, searchEnabled<br/>optimizeResult, planSteps<br/>planStreamText, skills<br/>selectedSkillIds, planTemplates<br/>lightboxUrl"]
+            ApiManage["ApiManage.vue<br/>API提供商管理<br/>表格+侧边抽屉"]
+            SkillManage["SkillManage.vue<br/>技能管理<br/>表格+侧边抽屉"]
+            RuleManage["RuleManage.vue<br/>规则管理<br/>表格+侧边抽屉"]
+            RefManage["ReferenceManage.vue<br/>参考图管理<br/>表格+上传"]
+            PlanTemplate["PlanTemplateManage.vue<br/>规划模板管理<br/>表格+AI生成"]
+            Dashboard["Dashboard.vue<br/>仪表盘<br/>统计卡片+快捷操作"]
+            Settings["Settings.vue<br/>设置页<br/>默认模型+通用设置+数据管理"]
+        end
+
+        subgraph F_COMPONENTS["组件层 Components (4个)"]
+            direction LR
+            AgentStreamCard["session/AgentStreamCard.vue<br/>Props: state, progress<br/>Events: cancel<br/>渲染: Agent徽章+时间线+步骤图片"]
+            CheckpointOverlay["session/CheckpointOverlay.vue<br/>Props: visible, message<br/>previewUrl, toolName<br/>Events: approve, reject, skip"]
+            ConfirmDialog["ConfirmDialog.vue<br/>Teleport→body<br/>模式: confirm/alert/prompt<br/>依赖: dialog单例"]
+            ErrorBoundary["ErrorBoundary.vue<br/>onErrorCaptured<br/>错误界面+重试按钮"]
+        end
+
+        subgraph F_STORES["状态管理 Pinia Stores (3个)"]
+            direction LR
+            SessionStore["session Store<br/>State: sessions, currentSessionId<br/>messages, loading<br/>selectedSkillIds<br/>agentStreamStates<br/>Actions: fetchSessions<br/>createSession<br/>selectSession<br/>fetchMessages<br/>sendMessage<br/>generate<br/>deleteSession<br/>renameSession<br/>getAgentStream<br/>setAgentStream<br/>clearAgentStream"]
+            ProviderStore["provider Store<br/>State: providers, loading<br/>currentProvider<br/>Actions: fetchProviders<br/>createProvider<br/>updateProvider<br/>deleteProvider<br/>testConnection"]
+            BillingStore["billing Store<br/>State: summary<br/>{today,month,total,currency}<br/>Actions: fetchSummary"]
+        end
+
+        subgraph F_API["API客户端层 (12个模块)"]
+            direction LR
+            APIClient["client.ts<br/>Axios实例<br/>baseURL: /api<br/>timeout: 600000ms<br/>响应拦截: 统一错误处理"]
+            APISSE["sse.ts<br/>parseSSEStream()<br/>ReadableStream逐行解析<br/>支持AbortSignal"]
+            APISession["session.ts<br/>list/get/create/update/delete<br/>getMessages/addMessage<br/>generate/cancel/checkpoint"]
+            APIPrompt["prompt.ts<br/>optimize (REST)<br/>optimizeStream (SSE)<br/>streamChat (SSE)<br/>streamChatWithTools (SSE)<br/>planStream (SSE)"]
+            APIProvider["apiProvider.ts<br/>list/get/create<br/>update/delete/test"]
+            APIBilling["billing.ts<br/>summary/details<br/>exportCsv/breakdown"]
+            APISkill["skill.ts<br/>list/get/create<br/>update/delete/import"]
+            APIRule["rule.ts<br/>list/get/create<br/>update/delete/toggle"]
+            APIReference["reference.ts<br/>list/get/upload<br/>update/delete"]
+            APIPlanTemplate["planTemplate.ts<br/>list/get/create<br/>update/delete/apply"]
+            APISettings["settings.ts<br/>getDefaultModels/setDefaultModels<br/>getSetting/setSetting<br/>getMigrationStatus/importData"]
+            APIDashboard["dashboard.ts<br/>stats"]
+        end
+
+        subgraph F_COMPOSABLES["组合式函数 Composables (4个)"]
+            direction LR
+            UseSessionEvents["useSessionEvents<br/>connect/disconnect<br/>回调: onTaskUpdate<br/>onSnapshot, onAgentEvent<br/>SSE: GET /api/sessions/events<br/>Last-Event-ID断线续传<br/>指数退避重连1s~30s"]
+            UseDialog["useDialog (单例)<br/>showConfirm/showAlert<br/>showPrompt<br/>confirm/cancel/close<br/>Promise式异步对话框<br/>dialogId防竞态"]
+            UseMarkdown["useMarkdown<br/>renderMarkdown(text)<br/>1.提取代码块→占位符<br/>2.HTML实体转义<br/>3.Markdown语法转换<br/>4.XSS:过滤危险协议<br/>5.外部链接rel=noopener<br/>6.还原代码块"]
+            UseDownload["useDownload<br/>downloadDir/loadDownloadDir<br/>generateFilename<br/>triggerBlobDownload<br/>nextTaskId"]
+        end
+
+        subgraph F_TYPES["类型定义 Types (27个接口)"]
+            direction LR
+            Types["ApiProvider/Create/Update<br/>Skill, Rule<br/>BillingSummary/Record/Breakdown<br/>ReferenceImage<br/>PromptOptimizeResult<br/>SessionInfo, Message<br/>GenerateRequest<br/>PlanStep, TemplateVariable<br/>PlanTemplate<br/>DefaultModelsConfig<br/>AgentStepEvent<br/>LamEventPayload, LamEvent<br/>AgentStreamState<br/>AgentStreamStep<br/>TaskHandle, TaskUpdateEvent"]
+        end
+
+        subgraph F_STYLES["全局样式 Styles"]
+            direction LR
+            GlobalCSS["global.css<br/>--bg: #FAFAFA<br/>--card: #FFFFFF<br/>--border: #E5E5E5<br/>--text: #1A1A1A<br/>--accent: #000000<br/>--danger: #CC0000<br/>--success: #008800<br/>--sidebar-width: 200px<br/>--topbar-height: 48px<br/>组件: btn/drawer/badge/empty-state"]
+        end
+    end
+
+    subgraph COMMUNICATION["通信层"]
+        direction LR
+        REST["REST API<br/>Axios → /api/*<br/>JSON请求/响应<br/>59个端点"]
+        SSE_PROMPT["SSE 流式<br/>fetch + parseSSEStream<br/>4个流式端点:<br/>/prompt/optimize/stream<br/>/prompt/stream<br/>/prompt/plan<br/>/sessions/events"]
+        LOCAL_STORAGE["localStorage<br/>assistantDialogHistory<br/>assistantMemoryMode"]
+        PINIA_BUS["Pinia Store<br/>跨组件状态共享<br/>session/provider/billing"]
+    end
+
+    subgraph BACKEND["后端层 Python3.14+ / FastAPI / SQLAlchemy"]
+        direction TB
+
+        subgraph B_MAIN["应用入口 main.py"]
+            direction LR
+            Lifespan["lifespan<br/>启动: init_db()<br/>中间件: CORSMiddleware<br/>静态文件: /assets + SPA fallback"]
+            SpecialEndpoints["特殊端点<br/>GET /api/health<br/>GET /api/migration-status<br/>POST /api/import-data<br/>GET /api/images/proxy<br/>(SSRF防护: scheme→DNS→ContentType)"]
+        end
+
+        subgraph B_ROUTERS["路由层 Routers (11个模块, 59端点)"]
+            direction LR
+            RSession["session.py<br/>/api/sessions<br/>11个端点<br/>GET /events (SSE)<br/>POST /generate<br/>POST /cancel<br/>POST /agent/checkpoint<br/>CRUD + messages"]
+            RPrompt["prompt.py<br/>/api/prompt<br/>4个端点<br/>POST /optimize<br/>POST /optimize/stream (SSE)<br/>POST /stream (SSE)<br/>POST /plan (SSE)"]
+            RProvider["api_provider.py<br/>/api/providers<br/>6个端点<br/>CRUD + test"]
+            RBilling["billing.py<br/>/api/billing<br/>4个端点<br/>summary/details/export/breakdown"]
+            RDashboard["dashboard.py<br/>/api/dashboard<br/>1个端点<br/>GET /stats"]
+            RDownload["download.py<br/>/api/download<br/>2个端点<br/>GET /default-path<br/>POST /image (路径遍历防护)"]
+            RPlanTemplate["plan_template.py<br/>/api/plan-templates<br/>6个端点<br/>CRUD + apply"]
+            RReference["reference.py<br/>/api/references<br/>5个端点<br/>upload + CRUD"]
+            RRule["rule.py<br/>/api/rules<br/>6个端点<br/>CRUD + toggle"]
+            RSkill["skill.py<br/>/api/skills<br/>6个端点<br/>CRUD + import"]
+            RSettings["settings.py<br/>/api/settings<br/>4个端点<br/>default-models + {key}"]
+        end
+
+        subgraph B_SCHEMAS["Schema层 Pydantic (9个模块)"]
+            direction LR
+            Schemas["ApiProvider: Create/Update/Response/TestResult<br/>AppSetting: Response/Update/DefaultModelsConfig<br/>Billing: RecordResponse/Summary/DetailQuery<br/>PlanTemplate: StepSchema/VariableSchema<br/>Create/Update/Response/ApplyRequest<br/>Prompt: OptimizeRequest/OptimizeResponse<br/>Reference: Create/Update/Response<br/>Rule: Create/Update/Response<br/>Session: Create/Update/Response<br/>MessageCreate/MessageResponse/GenerateRequest<br/>Skill: Create/Update/Response/Import"]
+        end
+
+        subgraph B_SERVICES["服务层 Services (15个模块)"]
+            direction LR
+            SGenerate["generate_service.py<br/>核心生成服务<br/>handle_generate()<br/>handle_agent_generate()<br/>generate_images_core()<br/>_execute_radiate()<br/>_execute_single()"]
+            SAgent["agent_service.py<br/>Agent循环<br/>run_agent_loop()<br/>AGENT_SYSTEM_PROMPT<br/>事件: Token/ToolCall<br/>ToolResult/Done<br/>Error/Warning/Cancelled"]
+            SAgentIntent["agent_intent_service.py<br/>意图解析<br/>parse_agent_intent()<br/>8级正则优先级<br/>策略: single/parallel<br/>iterative/radiate<br/>resolve_context_references()<br/>execute_multi_independent()"]
+            SAgentBridge["agent_bridge.py<br/>事件桥接<br/>agent_event_to_lam_event()<br/>AgentEvent→LamEvent映射"]
+            SPlanExecutor["plan_executor.py<br/>计划执行器<br/>execute_parallel()<br/>execute_iterative()"]
+            SSessionMgr["session_manager.py<br/>会话管理<br/>CRUD + 聚合统计<br/>add_message()<br/>add_system_message()"]
+            SBilling["billing_service.py<br/>计费服务<br/>calc_cost()<br/>record_billing()<br/>get_summary/details<br/>export_billing_csv<br/>get_breakdown()"]
+            SApiMgr["api_manager.py<br/>API提供商管理<br/>CRUD + 加密/解密<br/>test_connection()<br/>provider_to_response()"]
+            SPromptOpt["prompt_optimizer.py<br/>提示词优化<br/>optimize_prompt()<br/>optimize_prompt_stream()<br/>stream_llm_chat()<br/>5方向+自定义+多方向"]
+            SSettings["settings_service.py<br/>设置服务<br/>get/set_setting()<br/>get/set_default_models()"]
+            SSkillEngine["skill_engine.py<br/>技能引擎<br/>CRUD + import<br/>apply_skill()"]
+            SRuleEngine["rule_engine.py<br/>规则引擎<br/>CRUD + toggle<br/>apply_rules()<br/>default_params/filter/workflow"]
+            SRefMgr["reference_manager.py<br/>参考图管理<br/>save_upload()<br/>CRUD + 缩略图"]
+            SPlanTemplate["plan_template_service.py<br/>规划模板服务<br/>CRUD + apply<br/>seed_builtin_templates()<br/>3个内置模板"]
+            STaskMgr["task_manager.py<br/>任务管理器(单例)<br/>update_task/publish<br/>subscribe/unsubscribe<br/>cancel_task<br/>checkpoint: set/wait/resolve<br/>信号量: acquire/release(max=5)<br/>EventLog环形缓冲"]
+        end
+
+        subgraph B_TOOLS["工具层 Tools (4个)"]
+            direction LR
+            TBase["Tool (抽象基类)<br/>name, description<br/>parameters, checkpoint<br/>execute()→ToolResult<br/>to_openai_schema()"]
+            TResult["ToolResult (数据类)<br/>content: str<br/>meta: dict|None"]
+            TWebSearch["WebSearchTool<br/>name: web_search<br/>checkpoint: false<br/>参数: query, max_results<br/>调用: google.serper.dev/search<br/>重试: QUERY_VARIANTS<br/>5个变体关键词"]
+            TImageSearch["ImageSearchTool<br/>name: image_search<br/>checkpoint: false<br/>参数: query, max_results<br/>调用: google.serper.dev/images<br/>返回: sources[].image_url"]
+            TGenerateImage["GenerateImageTool<br/>name: generate_image<br/>checkpoint: true<br/>参数: prompt, count(1-4)<br/>reference_urls, grid_config<br/>kwargs: db, image_provider_id<br/>image_size, session_id<br/>普通模式→generate_images_core<br/>网格模式→PIL裁切"]
+            TPlan["PlanTool<br/>name: plan<br/>checkpoint: false<br/>参数: action(list/apply<br/>/create/get_detail)<br/>template_id, variables<br/>name, description<br/>steps, strategy<br/>委托: plan_template_service"]
+            TRegistry["ToolRegistry (全局单例)<br/>register/get<br/>list_openai_schemas<br/>list_for_openai(names)"]
+            TBase -->|继承| TWebSearch
+            TBase -->|继承| TImageSearch
+            TBase -->|继承| TGenerateImage
+            TBase -->|继承| TPlan
+        end
+
+        subgraph B_UTILS["工具库 Utils"]
+            direction LR
+            UCrypto["crypto.py<br/>AES-256-GCM加密<br/>_get_machine_fingerprint()<br/>MAC+主机机→SHA256<br/>_derive_key()<br/>encrypt(plaintext)<br/>decrypt(ciphertext_b64)<br/>mask_key(key)→****5678"]
+            ULLM["llm_client.py<br/>LLMClient<br/>chat()→同步对话<br/>chat_stream()→SSE流式<br/>chat_stream_with_tools()<br/>→FC流式<br/>test_connection()<br/>estimate_tokens()<br/>共享aiohttp.ClientSession<br/>端点: /v1/chat/completions"]
+            UImage["image_client.py<br/>ImageClient<br/>generate()→纯文本生图<br/>chat_edit()→多模态编辑(Tier1)<br/>edit()→原生编辑(Tier2)<br/>test_connection()<br/>extract_images()<br/>extract_images_from_chat()<br/>urls_to_base64()<br/>3层回退: chat_edit→edit→vision+generate"]
+        end
+
+        subgraph B_CORE["核心 Core"]
+            direction LR
+            LamEvent["LamEvent 数据类<br/>event_id: UUID4<br/>timestamp: 毫秒<br/>source_product: lamimager<br/>target_product: str|None<br/>event_type: str<br/>correlation_id: str<br/>payload: dict"]
+            EventLog["EventLog 环形缓冲<br/>append(event)→SSE_ID<br/>replay_since(last_id)<br/>max_size截断"]
+        end
+
+        subgraph B_MODELS["数据模型 Models (9个表)"]
+            direction LR
+            MBase["base.py<br/>gen_uuid()→UUID4<br/>now()→UTC时间<br/>所有模型共用"]
+            MSession["Session<br/>sessions表<br/>id, title, status<br/>idle/generating/optimizing<br/>/planning/error<br/>1:N→Message(cascade)<br/>1:N→BillingRecord"]
+            MMessage["Message<br/>messages表<br/>id, session_id(FK)<br/>role: user/assistant/system<br/>message_type: text/image<br/>/plan/optimization/skill<br/>/error/agent<br/>metadata_: JSON"]
+            MBilling["BillingRecord<br/>billing_records表<br/>id, session_id(FK)<br/>provider_id(FK)<br/>billing_type: per_call/per_token<br/>tokens_in, tokens_out<br/>cost, currency, detail(JSON)"]
+            MProvider["ApiProvider<br/>api_providers表<br/>id, nickname, base_url<br/>model_id, api_key_enc<br/>provider_type: image_gen<br/>/llm/web_search<br/>billing_type, unit_price<br/>currency, is_active"]
+            MSkill["Skill<br/>skills表<br/>id, name, description<br/>prompt_template<br/>parameters(JSON)<br/>is_builtin"]
+            MRule["Rule<br/>rules表<br/>id, name, rule_type<br/>default_params/filter/workflow<br/>config(JSON)<br/>is_active, priority"]
+            MReference["ReferenceImage<br/>reference_images表<br/>id, name, file_path<br/>file_type, file_size<br/>thumbnail, is_global<br/>strength, crop_config(JSON)"]
+            MPlanTemplate["PlanTemplate<br/>plan_templates表<br/>id, name, description<br/>strategy: parallel/iterative<br/>/radiate<br/>steps(JSON), variables(JSON)<br/>is_builtin, builtin_version"]
+            MAppSetting["AppSetting<br/>app_settings表<br/>id, key(UNIQUE)<br/>value(JSON)"]
+        end
+
+        subgraph B_INFRA["基础设施"]
+            direction LR
+            Config["config.py<br/>Settings(BaseSettings)<br/>APP_NAME, APP_VERSION<br/>DATA_DIR, STATIC_DIR<br/>UPLOAD_DIR, DB_PATH<br/>DB_URL, CORS_ORIGINS<br/>MAX_CONCURRENT_TASKS<br/>DEFAULT_IMAGE_SIZE<br/>model_post_init: 自动建目录<br/>+旧版迁移"]
+            Database["database.py<br/>engine: create_async_engine<br/>async_session: async_sessionmaker<br/>Base: DeclarativeBase<br/>get_db(): 依赖注入<br/>init_db(): 建表+迁移<br/>+种子内置模板"]
+        end
+    end
+
+    subgraph EXTERNAL["外部服务"]
+        direction LR
+        LLM_API["LLM API<br/>OpenAI兼容<br/>POST /v1/chat/completions<br/>Function Calling支持"]
+        IMG_API["图像生成API<br/>OpenAI兼容<br/>POST /v1/images/generations<br/>POST /v1/images/edits<br/>POST /v1/chat/completions(多模态)"]
+        SERPER_API["Serper API<br/>google.serper.dev/search<br/>google.serper.dev/images<br/>Web搜索+图片搜索"]
+        SQLITE["SQLite<br/>data/lamimager.db<br/>单文件数据库<br/>aiosqlite异步驱动"]
+    end
+
+    %% Frontend内部通信
+    Sessions -->|Pinia| SessionStore
+    Sessions -->|Pinia| ProviderStore
+    Sessions -->|Pinia| BillingStore
+    ApiManage -->|Pinia| ProviderStore
+    Settings -->|Pinia| ProviderStore
+    Sessions -->|composable| UseSessionEvents
+    Sessions -->|composable| UseDialog
+    Sessions -->|composable| UseDownload
+    Sessions -->|component| AgentStreamCard
+    Sessions -->|component| CheckpointOverlay
+    AppVue["App.vue"] -->|component| ConfirmDialog
+    AppVue -->|component| ErrorBoundary
+    AppVue -->|Pinia| BillingStore
+
+    %% Frontend API调用
+    Sessions -->|REST| APISession
+    Sessions -->|REST| APISkill
+    Sessions -->|REST| APISettings
+    Sessions -->|REST| APIPlanTemplate
+    Sessions -->|SSE| APIPrompt
+    Sessions -->|SSE| UseSessionEvents
+    ApiManage -->|REST| APIProvider
+    SkillManage -->|REST| APISkill
+    RuleManage -->|REST| APIRule
+    RefManage -->|REST| APIReference
+    PlanTemplate -->|REST| APIPlanTemplate
+    PlanTemplate -->|SSE| APIPrompt
+    Dashboard -->|REST| APIDashboard
+    Settings -->|REST| APISettings
+    AppVue -->|REST| APIBilling
+
+    %% API Client → Backend
+    APISession -->|REST /api/sessions| RSession
+    APIPrompt -->|SSE /api/prompt| RPrompt
+    APIProvider -->|REST /api/providers| RProvider
+    APIBilling -->|REST /api/billing| RBilling
+    APIDashboard -->|REST /api/dashboard| RDashboard
+    APISkill -->|REST /api/skills| RSkill
+    APIRule -->|REST /api/rules| RRule
+    APIReference -->|REST /api/references| RReference
+    APIPlanTemplate -->|REST /api/plan-templates| RPlanTemplate
+    APISettings -->|REST /api/settings| RSettings
+    UseSessionEvents -->|SSE /api/sessions/events| RSession
+
+    %% Router → Service
+    RSession -->|调用| SGenerate
+    RSession -->|调用| SSessionMgr
+    RSession -->|调用| STaskMgr
+    RPrompt -->|调用| SPromptOpt
+    RPrompt -->|调用| SAgent
+    RProvider -->|调用| SApiMgr
+    RBilling -->|调用| SBilling
+    RDashboard -->|调用| SSessionMgr
+    RPlanTemplate -->|调用| SPlanTemplate
+    RReference -->|调用| SRefMgr
+    RRule -->|调用| SRuleEngine
+    RSkill -->|调用| SSkillEngine
+    RSettings -->|调用| SSettings
+    RDownload -->|调用| SSettings
+
+    %% Service → Service
+    SGenerate -->|调用| SSessionMgr
+    SGenerate -->|调用| SBilling
+    SGenerate -->|调用| SSkillEngine
+    SGenerate -->|调用| SRuleEngine
+    SGenerate -->|调用| SPromptOpt
+    SGenerate -->|调用| SSettings
+    SGenerate -->|调用| SAgent
+    SGenerate -->|调用| SAgentIntent
+    SGenerate -->|调用| SPlanExecutor
+    SGenerate -->|调用| STaskMgr
+    SAgent -->|调用| SBilling
+    SAgent -->|调用| SSettings
+    SAgent -->|调用| SAgentIntent
+    SAgentIntent -->|调用| SBilling
+    SPlanExecutor -->|调用| SGenerate
+    SPlanExecutor -->|调用| SBilling
+    SPlanExecutor -->|调用| SSessionMgr
+    SPlanExecutor -->|调用| SSettings
+    SPromptOpt -->|调用| SBilling
+
+    %% Service → Utils
+    SGenerate -->|调用| UImage
+    SGenerate -->|调用| ULLM
+    SGenerate -->|调用| UCrypto
+    SAgent -->|调用| ULLM
+    SAgent -->|调用| UCrypto
+    SAgentIntent -->|调用| ULLM
+    SApiMgr -->|调用| UCrypto
+    SApiMgr -->|调用| ULLM
+    SApiMgr -->|调用| UImage
+    SPromptOpt -->|调用| ULLM
+    SPromptOpt -->|调用| UCrypto
+
+    %% Service → Tools
+    SAgent -->|registry.get| TWebSearch
+    SAgent -->|registry.get| TImageSearch
+    SAgent -->|registry.get| TGenerateImage
+    SAgent -->|registry.get| TPlan
+    SAgentIntent -->|registry.get| TGenerateImage
+    TGenerateImage -->|调用| SGenerate
+    TPlan -->|委托| SPlanTemplate
+
+    %% Service → Models
+    SSessionMgr -->|SQLAlchemy| MSession
+    SSessionMgr -->|SQLAlchemy| MMessage
+    SBilling -->|SQLAlchemy| MBilling
+    SApiMgr -->|SQLAlchemy| MProvider
+    SSkillEngine -->|SQLAlchemy| MSkill
+    SRuleEngine -->|SQLAlchemy| MRule
+    SRefMgr -->|SQLAlchemy| MReference
+    SPlanTemplate -->|SQLAlchemy| MPlanTemplate
+    SSettings -->|SQLAlchemy| MAppSetting
+
+    %% Agent事件流
+    SAgent -->|AgentEvent| SAgentBridge
+    SAgentBridge -->|LamEvent| STaskMgr
+    STaskMgr -->|EventLog| EventLog
+    STaskMgr -->|asyncio.Queue| RSession
+
+    %% Utils → External
+    ULLM -->|HTTP POST| LLM_API
+    UImage -->|HTTP POST| IMG_API
+    TWebSearch -->|HTTP GET| SERPER_API
+    TImageSearch -->|HTTP GET| SERPER_API
+
+    %% Models → SQLite
+    MSession -->|aiosqlite| SQLITE
+    MMessage -->|aiosqlite| SQLITE
+    MBilling -->|aiosqlite| SQLITE
+    MProvider -->|aiosqlite| SQLITE
+    MSkill -->|aiosqlite| SQLITE
+    MRule -->|aiosqlite| SQLITE
+    MReference -->|aiosqlite| SQLITE
+    MPlanTemplate -->|aiosqlite| SQLITE
+    MAppSetting -->|aiosqlite| SQLITE
+
+    %% Infra
+    Config -->|配置| Database
+    Database -->|Base| MSession
+    Database -->|Base| MMessage
+    Database -->|Base| MBilling
+    Database -->|Base| MProvider
+    Database -->|Base| MSkill
+    Database -->|Base| MRule
+    Database -->|Base| MReference
+    Database -->|Base| MPlanTemplate
+    Database -->|Base| MAppSetting
+
+    %% 样式定义
+    classDef frontend fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#000
+    classDef backend fill:#FFF3E0,stroke:#E65100,stroke-width:2px,color:#000
+    classDef external fill:#F3E5F5,stroke:#6A1B9A,stroke-width:2px,color:#000
+    classDef communication fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#000
+    classDef core fill:#FFEBEE,stroke:#C62828,stroke-width:2px,color:#000
+
+    class FRONTEND frontend
+    class BACKEND backend
+    class EXTERNAL external
+    class COMMUNICATION communication
+    class B_CORE core
+```
+
+## Agent 事件流详细
+
+```mermaid
+sequenceDiagram
+    participant User as 用户
+    participant Sessions as Sessions.vue
+    participant SSE as useSessionEvents
+    participant Router as session.py Router
+    participant GenSvc as generate_service
+    participant AgentSvc as agent_service
+    participant Bridge as agent_bridge
+    participant TaskMgr as task_manager
+    participant EventLog as EventLog
+    participant LLM as LLM API
+    participant Tool as Tools (4个)
+    participant BillingSvc as billing_service
+
+    User->>Sessions: 点击生成(Agent模式)
+    Sessions->>Router: POST /api/sessions/{id}/generate<br/>{agent_mode:true, prompt, ...}
+    Router->>GenSvc: handle_agent_generate(data)
+    GenSvc->>GenSvc: parse_agent_intent(prompt)<br/>8级正则解析意图
+    GenSvc->>GenSvc: resolve_context_references()<br/>解析参考图URL
+
+    alt single策略
+        GenSvc->>GenSvc: _execute_single()
+    else parallel策略
+        GenSvc->>GenSvc: execute_multi_independent()
+    else iterative策略
+        GenSvc->>GenSvc: _generate_iterative_steps()
+        GenSvc->>GenSvc: execute_iterative()
+    else radiate策略
+        GenSvc->>GenSvc: _generate_radiate_params()
+        GenSvc->>GenSvc: _execute_radiate()
+    end
+
+    GenSvc->>AgentSvc: run_agent_loop()<br/>(max_rounds=5)
+    AgentSvc->>TaskMgr: publish(task_started)
+
+    loop 每轮循环 (max 5轮)
+        AgentSvc->>AgentSvc: 令牌预算截断(6000)
+        AgentSvc->>LLM: chat_stream_with_tools()<br/>round 0-1: tool_choice=required<br/>round 2+: tool_choice=auto
+
+        loop 流式Token
+            LLM-->>AgentSvc: token chunk
+            AgentSvc->>Bridge: TokenEvent
+            Bridge->>TaskMgr: publish(LamEvent)<br/>event_type=task_progress<br/>payload.type=agent_token
+            TaskMgr->>EventLog: append(event)
+            TaskMgr-->>SSE: asyncio.Queue推送
+            SSE-->>Sessions: SSE data
+        end
+
+        alt LLM返回tool_calls
+            AgentSvc->>Bridge: ToolCallEvent
+            Bridge->>TaskMgr: publish<br/>payload.type=agent_tool_call
+
+            alt tool.checkpoint == true
+                AgentSvc->>TaskMgr: set_checkpoint_event()
+                AgentSvc->>Bridge: CheckpointEvent
+                Bridge->>TaskMgr: publish<br/>event_type=checkpoint_required<br/>payload.type=agent_checkpoint
+                TaskMgr-->>SSE: 推送
+                SSE-->>Sessions: 显示CheckpointOverlay
+                Sessions->>Router: POST /agent/checkpoint<br/>{action:"approve"}
+                Router->>TaskMgr: resolve_checkpoint(approved=true)
+                TaskMgr-->>AgentSvc: wait_checkpoint()返回true
+            end
+
+            AgentSvc->>Tool: execute(**kwargs)
+            Tool-->>AgentSvc: ToolResult
+            AgentSvc->>Bridge: ToolResultEvent
+            Bridge->>TaskMgr: publish<br/>payload.type=agent_tool_result
+            AgentSvc->>BillingSvc: record_billing(tool调用)
+        else LLM无tool_calls
+            AgentSvc->>AgentSvc: 循环结束
+        end
+    end
+
+    AgentSvc->>Bridge: DoneEvent<br/>{tokens_in, tokens_out, cost}
+    Bridge->>TaskMgr: publish(LamEvent)<br/>event_type=task_completed<br/>payload.type=agent_done
+    TaskMgr->>EventLog: append(event)
+    TaskMgr-->>SSE: 推送
+    SSE-->>Sessions: 更新AgentStreamCard状态
+    AgentSvc-->>GenSvc: 返回结果
+    GenSvc->>GenSvc: validate_agent_result()
+    GenSvc->>GenSvc: add_system_message(agent类型)
+    GenSvc-->>Router: 返回生成结果
+    Router-->>Sessions: HTTP 200
+```
+
+## 图片生成3层回退详细
+
+```mermaid
+flowchart TD
+    Start[generate_images_core] --> HasRef{reference_images<br/>存在?}
+
+    HasRef -->|是| Tier1[Tier 1: chat_edit<br/>POST /v1/chat/completions<br/>多模态消息+编号标签<br/>图1, 图2...]
+    HasRef -->|否| Direct[直接调用<br/>generate<br/>POST /v1/images/generations<br/>纯文本生图]
+
+    Tier1 --> Tier1Ok{成功提取图片?}
+    Tier1Ok -->|是| Success[返回图片URL列表]
+    Tier1Ok -->|否| Tier2[Tier 2: edit<br/>POST /v1/images/edits<br/>原生OpenAI img2img]
+
+    Tier2 --> Tier2Ok{成功提取图片?}
+    Tier2Ok -->|是| Success
+    Tier2Ok -->|否| Tier3[Tier 3: Vision+Generate<br/>1. LLM描述参考图<br/>2. 纯文本generate]
+
+    Tier3 --> Success
+
+    Direct --> Success
+
+    classDef success fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    classDef tier fill:#FFF9C4,stroke:#F57F17,stroke-width:2px
+    classDef decision fill:#E1BEE7,stroke:#6A1B9A,stroke-width:2px
+
+    class Success success
+    class Tier1,Tier2,Tier3 tier
+    class HasRef,Tier1Ok,Tier2Ok decision
+```
+
+## 辐射策略 Radiate 详细流程
+
+```mermaid
+flowchart TD
+    Start[_execute_radiate] --> Grid[_compute_grid_config<br/>根据expected_count计算<br/>网格cols×rows]
+
+    Grid --> Anchor[生成风格锚点网格图<br/>prompt含全局风格描述<br/>size: 4096x4096<br/>回退: 2048→1024]
+
+    Anchor --> AnchorOk{网格图生成成功?}
+    AnchorOk -->|否| Fallback[回退: 直接逐项generate<br/>无裁切]
+    AnchorOk -->|是| Crop[PIL裁切网格图<br/>按cols×rows分割<br/>得到子图列表]
+
+    Crop --> Loop[逐项扩展循环]
+    Loop --> ChatEdit[chat_edit扩展<br/>子图作为reference<br/>+项目特定prompt]
+    ChatEdit --> Next{还有下一项?}
+    Next -->|是| Loop
+    Next -->|否| Done[返回所有生成图片]
+
+    Fallback --> Done
+
+    classDef process fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
+    classDef decision fill:#FFF9C4,stroke:#F57F17,stroke-width:2px
+    classDef fallback fill:#FFECB3,stroke:#FF8F00,stroke-width:2px
+
+    class Grid,Anchor,Crop,ChatEdit process
+    class AnchorOk,Next decision
+    class Fallback fallback
+```
+
+## 意图解析优先级
+
+```mermaid
+flowchart TD
+    Start[parse_agent_intent<br/>输入: prompt, image_count<br/>context_messages, reference_labels] --> P1
+
+    P1{Priority 1: radiate<br/>套图/一组/系列<br/>统一风格/同角色/表情包}
+    P1 -->|匹配| R1[task_type=radiate<br/>strategy=radiate]
+
+    P1 -->|不匹配| P2{Priority 2: iterative<br/>先...再...最后<br/>草图精修/基于上一张}
+    P2 -->|匹配| R2[task_type=iterative<br/>strategy=iterative]
+
+    P2 -->|不匹配| P3{Priority 3: multi_independent<br/>三视图+方向枚举<br/>不同风格/分别画<br/>N张+列表}
+    P3 -->|匹配| R3[task_type=multi_independent<br/>strategy=parallel<br/>提取items列表]
+
+    P3 -->|不匹配| P4{Priority 4: single<br/>默认/变体/多张同风格}
+    P4 -->|匹配| R4[task_type=single<br/>strategy=single]
+
+    R1 --> Route[策略路由]
+    R2 --> Route
+    R3 --> Route
+    R4 --> Route
+
+    Route --> S1{single}
+    S1 -->|执行| E1[_execute_single<br/>直接generate_images_core]
+
+    Route --> S2{parallel}
+    S2 -->|执行| E2[execute_multi_independent<br/>并行generate_image工具调用]
+
+    Route --> S3{iterative}
+    S3 -->|执行| E3[_generate_iterative_steps<br/>LLM生成步骤<br/>+ execute_iterative<br/>顺序执行+参考图传递]
+
+    Route --> S4{radiate}
+    S4 -->|执行| E4[_generate_radiate_params<br/>LLM生成辐射参数<br/>+ _execute_radiate<br/>锚点网格→裁切→扩展]
+
+    classDef priority fill:#FFCDD2,stroke:#C62828,stroke-width:2px
+    classDef result fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
+    classDef strategy fill:#E1BEE7,stroke:#6A1B9A,stroke-width:2px
+
+    class P1,P2,P3,P4 priority
+    class R1,R2,R3,R4 result
+    class E1,E2,E3,E4 strategy
+```
+
+## SSE 事件广播详细
+
+```mermaid
+flowchart LR
+    subgraph 事件源
+        Agent["agent_service<br/>run_agent_loop()"]
+        PlanExec["plan_executor<br/>execute_parallel/iterative"]
+        GenSvc["generate_service<br/>handle_generate/agent_generate"]
+    end
+
+    subgraph 事件转换
+        AgentEvt["AgentEvent子类<br/>TokenEvent<br/>ToolCallEvent<br/>ToolResultEvent<br/>WarningEvent<br/>DoneEvent<br/>ErrorEvent<br/>CancelledEvent"]
+        Bridge["agent_bridge<br/>agent_event_to_lam_event()"]
+        LamEvt["LamEvent<br/>event_id, timestamp<br/>source_product: lamimager<br/>event_type, correlation_id<br/>payload"]
+    end
+
+    subgraph 事件分发
+        TaskMgr["task_manager(单例)<br/>publish(event)"]
+        EvtLog["EventLog环形缓冲<br/>append()→SSE_ID<br/>replay_since(last_id)"]
+        Queue["asyncio.Queue<br/>per-subscriber"]
+    end
+
+    subgraph SSE端点
+        Router["GET /api/sessions/events<br/>Last-Event-ID断线续传<br/>30s心跳ping"]
+    end
+
+    subgraph 前端接收
+        UseSE["useSessionEvents<br/>fetch+ReadableStream<br/>指数退避重连1s~30s"]
+        Callbacks["onTaskUpdate<br/>onSnapshot<br/>onAgentEvent"]
+    end
+
+    Agent -->|yield| AgentEvt
+    PlanExec -->|update_task| TaskMgr
+    GenSvc -->|update_task| TaskMgr
+    AgentEvt -->|转换| Bridge
+    Bridge -->|映射| LamEvt
+
+    LamEvt -->|publish| TaskMgr
+    TaskMgr -->|append| EvtLog
+    TaskMgr -->|put| Queue
+    Queue -->|SSE stream| Router
+    Router -->|SSE data| UseSE
+    UseSE -->|回调| Callbacks
+
+    classDef source fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
+    classDef transform fill:#FFF3E0,stroke:#E65100,stroke-width:2px
+    classDef dispatch fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px
+    classDef endpoint fill:#F3E5F5,stroke:#6A1B9A,stroke-width:2px
+    classDef frontend fill:#FFEBEE,stroke:#C62828,stroke-width:2px
+
+    class Agent,PlanExec,GenSvc source
+    class AgentEvt,Bridge,LamEvt transform
+    class TaskMgr,EvtLog,Queue dispatch
+    class Router endpoint
+    class UseSE,Callbacks frontend
+```
+
+## 数据模型关系
+
+```mermaid
+erDiagram
+    Session ||--o{ Message : "1:N cascade"
+    Session ||--o{ BillingRecord : "1:N"
+    ApiProvider ||--o{ BillingRecord : "1:N"
+
+    Session {
+        string id PK
+        string title
+        string status "idle/generating/optimizing/planning/error"
+        datetime created_at
+        datetime updated_at
+    }
+
+    Message {
+        string id PK
+        string session_id FK
+        enum role "user/assistant/system"
+        enum message_type "text/image/plan/optimization/skill/error/agent"
+        text content
+        json metadata_
+        datetime created_at
+    }
+
+    BillingRecord {
+        string id PK
+        string session_id FK
+        string provider_id FK
+        enum billing_type "per_call/per_token"
+        int tokens_in
+        int tokens_out
+        numeric cost
+        string currency
+        json detail
+        datetime created_at
+    }
+
+    ApiProvider {
+        string id PK
+        string nickname
+        string base_url
+        string model_id
+        text api_key_enc
+        enum provider_type "image_gen/llm/web_search"
+        enum billing_type "per_call/per_token"
+        numeric unit_price
+        string currency
+        boolean is_active
+        datetime created_at
+        datetime updated_at
+    }
+
+    Skill {
+        string id PK
+        string name
+        text description
+        text prompt_template
+        json parameters
+        boolean is_builtin
+        datetime created_at
+    }
+
+    Rule {
+        string id PK
+        string name
+        enum rule_type "default_params/filter/workflow"
+        json config
+        boolean is_active
+        int priority
+        datetime created_at
+    }
+
+    ReferenceImage {
+        string id PK
+        string name
+        string file_path
+        string file_type
+        int file_size
+        string thumbnail
+        boolean is_global
+        float strength
+        json crop_config
+        datetime created_at
+    }
+
+    PlanTemplate {
+        string id PK
+        string name
+        text description
+        string strategy "parallel/iterative/radiate"
+        json steps
+        json variables
+        boolean is_builtin
+        int builtin_version
+        datetime created_at
+        datetime updated_at
+    }
+
+    AppSetting {
+        string id PK
+        string key UK
+        json value
+        datetime updated_at
+    }
+```
+
+## 前端状态管理详细
+
+```mermaid
+flowchart TD
+    subgraph Pinia状态
+        SessionStore["session Store<br/>sessions: SessionInfo[]<br/>currentSessionId: string|null<br/>messages: Message[]<br/>loading: boolean<br/>selectedSkillIds: string[]<br/>agentStreamStates: Map&lt;string,AgentStreamState&gt;<br/>fetchSeq: 计数器(防竞态)"]
+        ProviderStore["provider Store<br/>providers: ApiProvider[]<br/>loading: boolean<br/>currentProvider: ApiProvider|null"]
+        BillingStore["billing Store<br/>summary: BillingSummary<br/>{today,month,total,currency}"]
+    end
+
+    subgraph 组件局部状态
+        SessionsState["Sessions.vue ref状态<br/>inputText, agentMode<br/>negativePrompt, imageCount<br/>imageWidth/Height, noSizeLimit<br/>showAssistant, assistantTab<br/>selectedImages, comparingImages<br/>isRefineMode, contextImageList<br/>activeTasks: Map&lt;string,TaskHandle&gt;<br/>dialogMessages<br/>responseStyle: default|verbose|concise<br/>contextMode: shared|current<br/>memoryMode: global|session<br/>searchEnabled<br/>optimizeResult, planSteps<br/>planStreamText, skills<br/>selectedSkillIds, planTemplates<br/>lightboxUrl"]
+    end
+
+    subgraph 持久化
+        LocalStorage["localStorage<br/>assistantDialogHistory<br/>(全局模式对话历史)<br/>assistantMemoryMode<br/>(记忆模式设置)"]
+    end
+
+    subgraph 消费者
+        Views["Sessions.vue<br/>ApiManage.vue<br/>SkillManage.vue<br/>RuleManage.vue<br/>ReferenceManage.vue<br/>PlanTemplateManage.vue<br/>Dashboard.vue<br/>Settings.vue<br/>App.vue"]
+    end
+
+    SessionStore -->|读取/写入| Views
+    ProviderStore -->|读取/写入| Views
+    BillingStore -->|读取/写入| Views
+    SessionsState -->|局部使用| Sessions
+    LocalStorage -->|读写| Sessions
+
+    classDef store fill:#E3F2FD,stroke:#1565C0,stroke-width:2px
+    classDef local fill:#FFF3E0,stroke:#E65100,stroke-width:2px
+    classDef persist fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px
+    classDef consumer fill:#F3E5F5,stroke:#6A1B9A,stroke-width:2px
+
+    class SessionStore,ProviderStore,BillingStore store
+    class SessionsState local
+    class LocalStorage persist
+    class Views consumer
+```

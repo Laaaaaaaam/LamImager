@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { sessionApi } from '../api/session'
-import type { SessionInfo, Message } from '../types'
+import type { SessionInfo, Message, AgentStreamState } from '../types'
 
 export const useSessionStore = defineStore('session', () => {
   const sessions = ref<SessionInfo[]>([])
@@ -9,7 +9,22 @@ export const useSessionStore = defineStore('session', () => {
   const messages = ref<Message[]>([])
   const loading = ref(false)
   const selectedSkillIds = ref<string[]>([])
+  const agentStreamStates = ref<Map<string, AgentStreamState>>(new Map())
   let fetchSeq = 0
+
+  function getAgentStream(sessionId: string): AgentStreamState | undefined {
+    return agentStreamStates.value.get(sessionId)
+  }
+
+  function setAgentStream(sessionId: string, state: AgentStreamState) {
+    agentStreamStates.value.set(sessionId, state)
+    agentStreamStates.value = new Map(agentStreamStates.value)
+  }
+
+  function clearAgentStream(sessionId: string) {
+    agentStreamStates.value.delete(sessionId)
+    agentStreamStates.value = new Map(agentStreamStates.value)
+  }
 
   async function fetchSessions() {
     loading.value = true
@@ -76,7 +91,7 @@ export const useSessionStore = defineStore('session', () => {
     }
   }
 
-  async function generate(sessionId: string, data: { prompt: string; negative_prompt?: string; image_count?: number; image_size?: string | undefined; optimize_directions?: string[]; custom_optimize_instruction?: string; reference_images?: string[]; reference_labels?: { index: number; source: string; name: string }[]; context_messages?: { role: string; content: string; image_urls?: string[] }[]; plan_strategy?: string }) {
+  async function generate(sessionId: string, data: { prompt: string; negative_prompt?: string; image_count?: number; image_size?: string | undefined; optimize_directions?: string[]; custom_optimize_instruction?: string; reference_images?: string[]; reference_labels?: { index: number; source: string; name: string }[]; context_messages?: { role: string; content: string; image_urls?: string[] }[]; plan_strategy?: string; agent_mode?: boolean; agent_tools?: string[]; agent_plan_strategy?: string }) {
     try {
       const { data: result } = await sessionApi.generate({
         ...data,
@@ -121,6 +136,7 @@ export const useSessionStore = defineStore('session', () => {
 
   return {
     sessions, currentSessionId, messages, loading, selectedSkillIds,
+    agentStreamStates, getAgentStream, setAgentStream, clearAgentStream,
     fetchSessions, createSession, selectSession, fetchMessages,
     sendMessage, generate, deleteSession, renameSession,
   }

@@ -115,7 +115,7 @@ function openDrawer(rule?: Rule) {
 
 async function saveRule() {
   let config = {}
-  try { config = JSON.parse(configJson.value) } catch { config = {} }
+  try { config = JSON.parse(configJson.value) } catch { dialog.showAlert('配置 JSON 格式无效'); return }
 
   if (editingRule.value) {
     await ruleApi.update(editingRule.value.id, { ...form, config })

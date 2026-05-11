@@ -1,4 +1,5 @@
 import api from './client'
+import { parseSSEStream } from './sse'
 import type { PromptOptimizeResult } from '../types'
 
 export const promptApi = {
@@ -28,39 +29,9 @@ export const promptApi = {
       throw new Error(err.detail || 'Optimize stream request failed')
     }
 
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('No response body')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    try {
-      while (true) {
-        if (signal?.aborted) break
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.error) throw new Error(data.error)
-              if (data.token) yield data.token
-              if (data.done) return
-            } catch (e: any) {
-              if (e.message !== 'Unknown' && !e.message.startsWith('data:')) {
-                throw e
-              }
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
+    for await (const data of parseSSEStream(response, signal)) {
+      if (data.token) yield data.token as string
+      if (data.done) return
     }
   },
 
@@ -83,39 +54,9 @@ export const promptApi = {
       throw new Error(err.detail || 'Stream request failed')
     }
 
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('No response body')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    try {
-      while (true) {
-        if (signal?.aborted) break
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.error) throw new Error(data.error)
-              if (data.token) yield data.token
-              if (data.done) return
-            } catch (e: any) {
-              if (e.message !== 'Unknown' && !e.message.startsWith('data:')) {
-                throw e
-              }
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
+    for await (const data of parseSSEStream(response, signal)) {
+      if (data.token) yield data.token as string
+      if (data.done) return
     }
   },
 
@@ -139,41 +80,11 @@ export const promptApi = {
       throw new Error(err.detail || 'Stream request failed')
     }
 
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('No response body')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    try {
-      while (true) {
-        if (signal?.aborted) break
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const event = JSON.parse(line.slice(6))
-              if (event.error) throw new Error(event.error)
-              if (event.token) yield { type: 'token', data: event.token }
-              if (event.tool_call) yield { type: 'tool_call', data: event.tool_call }
-              if (event.tool_result) yield { type: 'tool_result', data: event.tool_result }
-              if (event.done) yield { type: 'done', data: event }
-            } catch (e: any) {
-              if (e.message !== 'Unknown' && !e.message.startsWith('data:')) {
-                throw e
-              }
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
+    for await (const data of parseSSEStream(response, signal)) {
+      if (data.token) yield { type: 'token', data: data.token }
+      if (data.tool_call) yield { type: 'tool_call', data: data.tool_call }
+      if (data.tool_result) yield { type: 'tool_result', data: data.tool_result }
+      if (data.done) yield { type: 'done', data }
     }
   },
 
@@ -196,39 +107,9 @@ export const promptApi = {
       throw new Error(err.detail || 'Plan stream request failed')
     }
 
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('No response body')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    try {
-      while (true) {
-        if (signal?.aborted) break
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (data.error) throw new Error(data.error)
-              if (data.token) yield data.token
-              if (data.done) return
-            } catch (e: any) {
-              if (e.message !== 'Unknown' && !e.message.startsWith('data:')) {
-                throw e
-              }
-            }
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock()
+    for await (const data of parseSSEStream(response, signal)) {
+      if (data.token) yield data.token as string
+      if (data.done) return
     }
   },
 }
