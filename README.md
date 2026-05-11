@@ -2,6 +2,9 @@
 
 AI 图像生成管理器 — 全栈桌面应用，支持 AI 驱动图像生成、对话式界面、LLM 规划与实时流式输出。
 
+## 光速开始
+在 [Release](https://github.com/Laaaaaaaam/LamImager/releases) 提供了 zip 下载文件，直接解压点击解压好的 exe 程序就能运行。
+
 ## 功能特性
 
 **核心工作流**
