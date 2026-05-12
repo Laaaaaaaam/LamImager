@@ -59,11 +59,14 @@ ls -la frontend/dist/
 ## Configuration
 
 ### API Providers
-Configure in UI at **API 配置** page or via API:
+Configure in UI at **API 配置** page or via API. The system uses a two-level model:
+
+1. **Vendor (供应商)**: Configures name, base_url, and API key. One key per vendor.
+2. **Model (模型)**: Individual models linked to a vendor (e.g., `gpt-4o`, `dall-e-3` under "OpenAI" vendor).
 
 **LLM Provider**: OpenAI-compatible `/v1/chat/completions` endpoint
 **Image Provider**: OpenAI-compatible `/v1/images/generations` endpoint  
-**Web Search Provider**: Serper.dev (配置方式：API管理 → 新建 → 类型选 `联网搜索` → 填写 Serper API Key)
+**Web Search Provider**: Serper.dev (配置方式：API管理 → 新建供应商 → 类型选 `联网搜索` → 填写 Serper API Key)
 
 | Provider Type | ui label | API URL | Required |
 |---------------|----------|---------|----------|
@@ -131,8 +134,8 @@ curl "http://localhost:8000/api/billing/export" -o billing.csv
 
 ### API key encryption fails
 
-1. The encryption key is derived from machine fingerprint
-2. If moving to a new machine, API keys need to be re-entered
+1. The encryption key is derived from a file-based seed (`<DATA_DIR>/.encryption_seed`)
+2. If migrating to a new machine, copy the `.encryption_seed` file along with the database
 3. Check `app/utils/crypto.py` for key derivation logic
 
 ---
@@ -223,7 +226,7 @@ The `/api/download/image` endpoint validates filenames strictly:
 3. If download fails with 400, check filename for special characters
 
 ### API Key Encryption
-1. Keys are encrypted with AES-256-GCM using machine fingerprint
-2. Moving to a new machine requires re-entering all API keys
+1. Keys are encrypted with AES-256-GCM using a file-based seed stored at `<DATA_DIR>/.encryption_seed`
+2. To move data to a new machine, copy both the database and the `.encryption_seed` file
 3. Decrypt errors are logged but never crash the server
 4. Check `app/utils/crypto.py` for key derivation logic

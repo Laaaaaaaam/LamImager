@@ -26,6 +26,8 @@ class PlanStepSchema(BaseModel):
     description: str = ""
     image_count: int = 1
     image_size: str = ""
+    role: str = ""
+    repeat: str = ""
     reference_step_indices: list[int] | None = None
     checkpoint: dict | None = None
     condition: PlanStepConditionSchema | None = None

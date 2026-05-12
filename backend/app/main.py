@@ -4,6 +4,7 @@ __license__ = "MIT"
 __email__ = "2667605815@qq.com"
 
 import ipaddress
+import logging
 import socket
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,33 @@ from fastapi.responses import FileResponse, Response
 from app.config import settings
 from app.database import init_db
 from app.routers import api_provider, prompt, skill, rule, billing, reference, dashboard, session, settings as settings_router, plan_template, download
+
+
+def _setup_logging():
+    log_file = settings.LOG_FILE
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    file_handler = logging.FileHandler(str(log_file), encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%H:%M:%S"
+    ))
+    
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, settings.LOG_LEVEL, logging.INFO))
+    root_logger.addHandler(file_handler)
+    root_logger.addHandler(console_handler)
+
+
+_setup_logging()
 
 
 @asynccontextmanager

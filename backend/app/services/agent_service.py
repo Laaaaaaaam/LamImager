@@ -255,6 +255,16 @@ async def run_agent_loop(
     total_tokens_in = 0
     total_tokens_out = 0
     working_messages = list(messages)
+
+    if session_id:
+        try:
+            from app.services.generate_service import _build_agent_context
+            context = await _build_agent_context(db, session_id)
+            for msg in reversed(context):
+                working_messages.insert(1, msg)
+        except Exception as e:
+            logger.warning(f"Failed to build agent context: {e}")
+
     partial_output = ""
 
     MAX_WORKING_TOKENS = 6000

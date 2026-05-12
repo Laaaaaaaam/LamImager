@@ -302,6 +302,94 @@ Body:
 
 ---
 
+## Vendors
+
+### List Vendors
+```
+GET /api/vendors
+```
+
+Response: `Vendor[]`
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "OpenAI",
+    "base_url": "https://api.openai.com",
+    "api_key_masked": "****xxxx",
+    "is_active": true,
+    "model_count": 3,
+    "created_at": "2026-05-10T12:00:00",
+    "updated_at": "2026-05-10T12:00:00"
+  }
+]
+```
+
+### Create Vendor
+```
+POST /api/vendors
+```
+
+Body:
+```json
+{
+  "name": "OpenAI",
+  "base_url": "https://api.openai.com",
+  "api_key": "sk-xxxxx",
+  "is_active": true
+}
+```
+
+Response: `Vendor` (api_key masked)
+
+### Get / Update / Delete Vendor
+```
+GET /api/vendors/{id}
+PUT /api/vendors/{id}
+DELETE /api/vendors/{id}
+```
+
+### Test Vendor Connection
+```
+POST /api/vendors/{id}/test
+```
+
+Response:
+```json
+{
+  "success": true,
+  "message": "Connection successful"
+}
+```
+
+### List Models Under Vendor
+```
+GET /api/vendors/{id}/models
+```
+
+Response: `ApiProvider[]`
+
+### Create Model Under Vendor
+```
+POST /api/vendors/{id}/models
+```
+
+Body:
+```json
+{
+  "nickname": "GPT-4o",
+  "model_id": "gpt-4o",
+  "provider_type": "llm",
+  "billing_type": "per_token",
+  "unit_price": 0.01,
+  "currency": "USD"
+}
+```
+Note: `base_url` and `api_key` are inherited from vendor.
+
+---
+
 ## Providers
 
 ### List Providers
@@ -319,7 +407,7 @@ Response: `ApiProvider[]`
 POST /api/providers
 ```
 
-Body:
+Body (standalone, with own key):
 ```json
 {
   "nickname": "OpenAI GPT-4",
@@ -333,6 +421,22 @@ Body:
   "is_active": true
 }
 ```
+
+Body (under vendor, inherits base_url/api_key):
+```json
+{
+  "nickname": "GPT-4o",
+  "model_id": "gpt-4o",
+  "vendor_id": "uuid",
+  "provider_type": "llm",
+  "billing_type": "per_token",
+  "unit_price": 0.01
+}
+```
+
+Query parameters for list:
+- `provider_type` (optional): `image_gen` | `llm` | `web_search`
+- `vendor_id` (optional): filter by vendor
 
 Response: `ApiProvider` (api_key masked as `****xxxx`)
 
@@ -708,6 +812,7 @@ Response: `PlanTemplate[]`
     "steps": [{"prompt": "...", "description": "..."}],
     "variables": [{"key": "product", "type": "string", "label": "Product name", "default": ""}],
     "is_builtin": true,
+    "builtin_version": 1,
     "created_at": "2026-05-07T12:00:00",
     "updated_at": "2026-05-07T12:00:00"
   }
@@ -810,6 +915,6 @@ Response:
 ```json
 {
   "status": "ok",
-  "version": "0.1.0"
+  "version": "0.3.1-beta"
 }
 ```

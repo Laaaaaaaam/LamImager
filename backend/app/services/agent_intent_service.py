@@ -46,6 +46,7 @@ class AgentIntent:
     requires_consistency: bool = False
     confidence: float = 0.0
     user_goal: str = ""
+    decision_trace: dict = field(default_factory=dict)
 
 
 STRATEGY_MAP: dict[str, str] = {
@@ -152,6 +153,7 @@ def parse_agent_intent(
         expected_count: int = 1,
         items: list[AgentItem] | None = None,
         confidence: float = 1.0,
+        regex_rule: str = "",
     ) -> AgentIntent:
         strategy = STRATEGY_MAP.get(task_type, "single")
         intent = AgentIntent(
@@ -161,6 +163,16 @@ def parse_agent_intent(
             items=items or [],
             user_goal=prompt,
             confidence=confidence,
+            decision_trace={
+                "source": "regex",
+                "regex_task_type": task_type,
+                "regex_confidence": confidence,
+                "regex_rule": regex_rule,
+                "llm_called": False,
+                "final_task_type": task_type,
+                "final_confidence": confidence,
+                "reason": f"regex rule matched: {regex_rule}" if regex_rule else "default fallback",
+            },
         )
         intent.requires_consistency = _requires_consistency(intent)
         return intent
@@ -170,21 +182,21 @@ def parse_agent_intent(
     radiate_pattern = r"(套图|一组|系列|一套|set\b|series|collection|pack\b)"
     if re.search(radiate_pattern, lower) and not _has_different_style_keyword(prompt):
         count_n = _count_n_images(prompt) or 2
-        return _make_intent("radiate", expected_count=count_n, confidence=1.0)
+        return _make_intent("radiate", expected_count=count_n, confidence=1.0, regex_rule="radiate_pattern:套图/一组/系列")
 
     # 统一风格/同风格/consistent/same style (排除"不同风格")
     if _has_consistency_keyword(prompt):
         count_n = _count_n_images(prompt) or image_count
         if count_n >= 2:
-            return _make_intent("radiate", expected_count=count_n, confidence=1.0)
+            return _make_intent("radiate", expected_count=count_n, confidence=1.0, regex_rule="radiate:统一风格/同风格")
 
     # 同一角色/同角色/same character
     same_char = r"(同一角色|同角色|same\s+character|同一个角色)"
     if re.search(same_char, lower):
         count_n = _count_n_images(prompt) or image_count
         if count_n >= 2:
-            return _make_intent("radiate", expected_count=count_n, confidence=1.0)
-        return _make_intent("radiate", expected_count=max(count_n, 2), confidence=0.85)
+            return _make_intent("radiate", expected_count=count_n, confidence=1.0, regex_rule="radiate:同一角色")
+        return _make_intent("radiate", expected_count=max(count_n, 2), confidence=0.85, regex_rule="radiate:同一角色(低置信)")
 
     # 表情包/贴纸包/sticker pack (without "不同风格") → radiate
     sticker_pattern = r"(表情包|贴纸包|sticker\s*pack|emoticon\s*set|meme\s*set|图标集|icon\s*set|四联画|成组|插画集)"
@@ -192,22 +204,22 @@ def parse_agent_intent(
     if sticker_m and not _has_different_style_keyword(prompt):
         count_n = _count_n_images(prompt)
         if count_n and count_n >= 2:
-            return _make_intent("radiate", expected_count=count_n, confidence=1.0)
+            return _make_intent("radiate", expected_count=count_n, confidence=1.0, regex_rule="radiate:表情包/贴纸包")
         labels = _extract_item_labels(prompt, sticker_m.group(0))
         if labels and len(labels) >= 2:
             items = [
                 AgentItem(id=f"item_{i}", label=label, prompt_hint=PROMPT_HINT_MAP.get(label, label))
                 for i, label in enumerate(labels)
             ]
-            return _make_intent("radiate", expected_count=len(items), items=items, confidence=0.85)
-        return _make_intent("radiate", expected_count=4, confidence=0.7)
+            return _make_intent("radiate", expected_count=len(items), items=items, confidence=0.85, regex_rule="radiate:表情包+标签枚举")
+        return _make_intent("radiate", expected_count=4, confidence=0.7, regex_rule="radiate:表情包(默认4张)")
 
     # N张 + (同风格/统一/同角色/一套) → radiate (排除"不同风格")
     n_img = _count_n_images(prompt)
     if n_img and n_img >= 2 and not _has_different_style_keyword(prompt):
         radiate_context = r"(同风格|统一|同角色|一套|同系列|same|consistent|unified)"
         if re.search(radiate_context, lower):
-            return _make_intent("radiate", expected_count=n_img, confidence=0.85)
+            return _make_intent("radiate", expected_count=n_img, confidence=0.85, regex_rule="radiate:N张+同风格")
 
     # ── Priority 2: iterative ────────────────────────────────────────
     # 先...再...最后... / first...then...finally
@@ -215,20 +227,20 @@ def parse_agent_intent(
     if re.search(iterative_pattern, lower):
         count_m = re.search(r"(\d+)\s*步", prompt)
         n = int(count_m.group(1)) if count_m else 2
-        return _make_intent("iterative", expected_count=n, confidence=1.0)
+        return _make_intent("iterative", expected_count=n, confidence=1.0, regex_rule="iterative:先...再...最后")
 
     # 先...再... (2-step without "最后")
     iterative_2step = r"(先|首先|first)\s*.{2,}(再|然后|接着|then|next)"
     if re.search(iterative_2step, lower):
-        return _make_intent("iterative", expected_count=2, confidence=1.0)
+        return _make_intent("iterative", expected_count=2, confidence=1.0, regex_rule="iterative:先...再...")
 
     # 草图.*精修 / sketch.*refine
     if re.search(r"草图.*精修|sketch.*refine|初稿.*精修|draft.*refine", lower):
-        return _make_intent("iterative", expected_count=2, confidence=1.0)
+        return _make_intent("iterative", expected_count=2, confidence=1.0, regex_rule="iterative:草图精修")
 
     # 基于上一张/继续改/延续上一步
     if re.search(r"基于上一张|继续改|延续上一步|基于.*上一步|基于.*上一张|refine.*previous|based\s+on.*previous", lower):
-        return _make_intent("iterative", expected_count=2, confidence=1.0)
+        return _make_intent("iterative", expected_count=2, confidence=1.0, regex_rule="iterative:基于上一张")
 
     # ── Priority 3: multi_independent ────────────────────────────────
     # 三视图 + direction enumeration
@@ -244,7 +256,7 @@ def parse_agent_intent(
             AgentItem(id="side", label="侧面" if is_chinese else "side", prompt_hint=PROMPT_HINT_MAP.get("侧面", "side view")),
             AgentItem(id="back", label="背面" if is_chinese else "back", prompt_hint=PROMPT_HINT_MAP.get("背面", "back view")),
         ]
-        return _make_intent("multi_independent", expected_count=3, items=items, confidence=1.0)
+        return _make_intent("multi_independent", expected_count=3, items=items, confidence=1.0, regex_rule="multi_independent:三视图+方向枚举")
 
     # Bare direction enumeration (no sheet/turnaround)
     sheet_keywords = r"sheet|turnaround|设定表|排版|一张图|单张"
@@ -257,7 +269,7 @@ def parse_agent_intent(
             for i, d in enumerate(unique_dirs):
                 did = d if d in ("正面", "侧面", "背面", "左", "右", "上", "下", "前", "后") else f"item_{i}"
                 items.append(AgentItem(id=did, label=d, prompt_hint=PROMPT_HINT_MAP.get(d, d)))
-            return _make_intent("multi_independent", expected_count=len(items), items=items, confidence=0.85)
+            return _make_intent("multi_independent", expected_count=len(items), items=items, confidence=0.85, regex_rule="multi_independent:方向枚举(中文)")
         dir_en = re.findall(r"\b(front|side|back|left|right|top|bottom)\b", lower)
         if len(dir_en) >= 2:
             unique_dirs = list(dict.fromkeys(dir_en))
@@ -265,7 +277,7 @@ def parse_agent_intent(
             for d in unique_dirs:
                 hint = PROMPT_HINT_MAP.get(d, f"{d} view")
                 items.append(AgentItem(id=d, label=d, prompt_hint=hint))
-            return _make_intent("multi_independent", expected_count=len(items), items=items, confidence=0.85)
+            return _make_intent("multi_independent", expected_count=len(items), items=items, confidence=0.85, regex_rule="multi_independent:方向枚举(英文)")
 
     # N张不同风格/N个方案/分别画/每张不同
     if _has_different_style_keyword(prompt):
@@ -275,7 +287,7 @@ def parse_agent_intent(
                 AgentItem(id=f"style_{i+1}", label=f"风格{i+1}", prompt_hint=f"style variation {i+1}")
                 for i in range(count_n)
             ]
-            return _make_intent("multi_independent", expected_count=count_n, items=auto_items, confidence=1.0)
+            return _make_intent("multi_independent", expected_count=count_n, items=auto_items, confidence=1.0, regex_rule="multi_independent:不同风格")
 
     if re.search(r"分别画|每张不同|多个方案|不同方案|不同logo|不同设计|different\s+approach|different\s+logo", lower):
         count_n = _count_n_images(prompt) or image_count
@@ -284,12 +296,12 @@ def parse_agent_intent(
                 AgentItem(id=f"variant_{i+1}", label=f"方案{i+1}", prompt_hint=f"design variation {i+1}")
                 for i in range(count_n)
             ]
-            return _make_intent("multi_independent", expected_count=count_n, items=auto_items, confidence=0.85)
+            return _make_intent("multi_independent", expected_count=count_n, items=auto_items, confidence=0.85, regex_rule="multi_independent:分别画/多个方案")
         auto_items = [
             AgentItem(id=f"variant_{i+1}", label=f"方案{i+1}", prompt_hint=f"design variation {i+1}")
             for i in range(max(image_count, 2))
         ]
-        return _make_intent("multi_independent", expected_count=max(image_count, 2), items=auto_items, confidence=0.7)
+        return _make_intent("multi_independent", expected_count=max(image_count, 2), items=auto_items, confidence=0.7, regex_rule="multi_independent:分别画(低置信)")
 
     # N张 + list enumeration (without radiate keywords)
     count_pattern_en = re.search(r"(\d+)\s*images", lower)
@@ -307,28 +319,28 @@ def parse_agent_intent(
                     AgentItem(id=f"item_{i}", label=label, prompt_hint=PROMPT_HINT_MAP.get(label, label))
                     for i, label in enumerate(labels)
                 ]
-                return _make_intent("multi_independent", expected_count=len(items), items=items, confidence=0.85)
+                return _make_intent("multi_independent", expected_count=len(items), items=items, confidence=0.85, regex_rule="multi_independent:N张+列表枚举")
 
     # ── Priority 4: single (default) ─────────────────────────────────
     # Special: 三视图 + sheet keyword → single (1 image)
     if re.search(r"三视图|three\s*views?", lower):
         sheet_kw = r"(设定表|sheet|turnaround|一张图|排版|参考图)"
         if re.search(sheet_kw, lower):
-            return _make_intent("single", expected_count=1, confidence=0.9)
+            return _make_intent("single", expected_count=1, confidence=0.9, regex_rule="single:三视图+sheet")
 
     # 变体/多张同风格/image_count > 1
     variant_keywords = r"(同一提示词|同一个.*prompt|不同风格|variants?|版本|变体)"
     if re.search(variant_keywords, lower) or image_count > 1:
         count_m2 = re.search(r"(\d+)\s*[张張個个]", prompt)
         n = int(count_m2.group(1)) if count_m2 else image_count
-        return _make_intent("single", expected_count=n, confidence=0.7)
+        return _make_intent("single", expected_count=n, confidence=0.7, regex_rule="single:变体/多张同风格")
 
     # 显式单图关键词 → 高置信单图
     if re.search(r"画一张|一张图|一个.*图|生成一张|generate\s+a\s+single|one\s+image", lower):
-        return _make_intent("single", expected_count=max(image_count, 1), confidence=0.9)
+        return _make_intent("single", expected_count=max(image_count, 1), confidence=0.9, regex_rule="single:显式单图关键词")
 
     # Default fallback — low confidence, may be anything
-    return _make_intent("single", expected_count=max(image_count, 1), confidence=0.3)
+    return _make_intent("single", expected_count=max(image_count, 1), confidence=0.3, regex_rule="single:default_fallback")
 
 
 def _requires_consistency(intent: AgentIntent) -> bool:
@@ -433,6 +445,10 @@ async def _classify_intent_with_llm(
     llm_model_id: str = "",
     context_images: list[str] | None = None,
 ) -> dict | None:
+    logger.info(
+        f"_classify_intent_with_llm: calling LLM, model_id={llm_model_id}, "
+        f"prompt={prompt[:60]}..., context_images={len(context_images) if context_images else 0}"
+    )
     user_msg = json.dumps({"request": prompt, "explicit_count": image_count}, ensure_ascii=False)
 
     try:
@@ -446,6 +462,7 @@ async def _classify_intent_with_llm(
             temperature=0.3,
         )
         text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+        logger.debug(f"_classify_intent_with_llm: raw response = {text[:200]}")
         text = text.strip()
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -455,7 +472,13 @@ async def _classify_intent_with_llm(
             parsed.setdefault("expected_count", image_count)
             parsed.setdefault("confidence", 0.5)
             parsed.setdefault("reason", "")
+            logger.info(
+                f"_classify_intent_with_llm: parsed result = {parsed.get('task_type')}, "
+                f"confidence={parsed.get('confidence')}, reason={parsed.get('reason', '')[:50]}"
+            )
             return parsed
+        else:
+            logger.warning(f"_classify_intent_with_llm: invalid task_type in response: {parsed.get('task_type')}")
     except Exception as e:
         logger.warning(f"_classify_intent_with_llm failed: {e}")
     return None
@@ -467,6 +490,15 @@ HYBRID_CONFIDENCE_THRESHOLD = 0.8
 
 def _pick_best_intent(regex_intent: AgentIntent, llm_result: dict | None) -> AgentIntent:
     if llm_result is None:
+        regex_intent.decision_trace = {
+            "source": "regex_only",
+            "regex_task_type": regex_intent.task_type,
+            "regex_confidence": regex_intent.confidence,
+            "llm_called": False,
+            "final_task_type": regex_intent.task_type,
+            "final_confidence": regex_intent.confidence,
+            "reason": "regex confidence >= 0.8 or no LLM key",
+        }
         return regex_intent
 
     llm_type = llm_result["task_type"]
@@ -482,12 +514,24 @@ def _pick_best_intent(regex_intent: AgentIntent, llm_result: dict | None) -> Age
     if llm_type == regex_intent.task_type:
         regex_intent.confidence = max(regex_intent.confidence, llm_confidence)
         regex_intent.expected_count = max(regex_intent.expected_count, llm_count)
+        regex_intent.decision_trace = {
+            "source": "hybrid_agree",
+            "regex_task_type": regex_intent.task_type,
+            "regex_confidence": regex_intent.confidence,
+            "llm_task_type": llm_type,
+            "llm_confidence": llm_confidence,
+            "llm_reason": llm_reason,
+            "llm_called": True,
+            "final_task_type": regex_intent.task_type,
+            "final_confidence": regex_intent.confidence,
+            "reason": "regex and LLM agree",
+        }
         return regex_intent
 
     if llm_confidence > regex_intent.confidence + 0.2:
         logger.info(f"LLM overrides regex: {regex_intent.task_type} → {llm_type}")
         strategy = STRATEGY_MAP.get(llm_type, "single")
-        return AgentIntent(
+        new_intent = AgentIntent(
             task_type=llm_type,
             expected_count=llm_count,
             strategy=strategy,
@@ -497,8 +541,34 @@ def _pick_best_intent(regex_intent: AgentIntent, llm_result: dict | None) -> Age
             reference_labels=regex_intent.reference_labels,
             user_goal=regex_intent.user_goal,
             confidence=llm_confidence,
+            decision_trace={
+                "source": "llm_override",
+                "regex_task_type": regex_intent.task_type,
+                "regex_confidence": regex_intent.confidence,
+                "llm_task_type": llm_type,
+                "llm_confidence": llm_confidence,
+                "llm_reason": llm_reason,
+                "llm_called": True,
+                "final_task_type": llm_type,
+                "final_confidence": llm_confidence,
+                "reason": f"LLM confidence ({llm_confidence:.2f}) > regex ({regex_intent.confidence:.2f}) + 0.2",
+            },
         )
+        new_intent.requires_consistency = _requires_consistency(new_intent)
+        return new_intent
 
+    regex_intent.decision_trace = {
+        "source": "regex_win",
+        "regex_task_type": regex_intent.task_type,
+        "regex_confidence": regex_intent.confidence,
+        "llm_task_type": llm_type,
+        "llm_confidence": llm_confidence,
+        "llm_reason": llm_reason,
+        "llm_called": True,
+        "final_task_type": regex_intent.task_type,
+        "final_confidence": regex_intent.confidence,
+        "reason": f"LLM confidence ({llm_confidence:.2f}) not significantly higher than regex ({regex_intent.confidence:.2f})",
+    }
     return regex_intent
 
 
@@ -519,12 +589,43 @@ async def hybrid_parse_intent(
         reference_labels=reference_labels,
     )
 
+    logger.info(
+        f"hybrid_parse_intent: regex result = {intent.task_type}, "
+        f"confidence = {intent.confidence:.2f}, expected_count = {intent.expected_count}"
+    )
+
     if intent.confidence >= HYBRID_CONFIDENCE_THRESHOLD:
+        intent.decision_trace = {
+            "source": "regex_high_confidence",
+            "regex_task_type": intent.task_type,
+            "regex_confidence": intent.confidence,
+            "llm_called": False,
+            "final_task_type": intent.task_type,
+            "final_confidence": intent.confidence,
+            "reason": f"regex confidence ({intent.confidence:.2f}) >= threshold ({HYBRID_CONFIDENCE_THRESHOLD})",
+        }
+        logger.info(
+            f"hybrid_parse_intent: skipping LLM (confidence {intent.confidence:.2f} >= {HYBRID_CONFIDENCE_THRESHOLD})"
+        )
         return intent
 
     if not llm_api_key:
         logger.debug(f"Regex confidence {intent.confidence:.2f} below threshold, but no LLM key available")
+        intent.decision_trace = {
+            "source": "regex_no_llm_key",
+            "regex_task_type": intent.task_type,
+            "regex_confidence": intent.confidence,
+            "llm_called": False,
+            "llm_error": "no LLM API key configured",
+            "final_task_type": intent.task_type,
+            "final_confidence": intent.confidence,
+            "reason": f"regex confidence ({intent.confidence:.2f}) < threshold but no LLM key available",
+        }
         return intent
+
+    logger.info(
+        f"hybrid_parse_intent: calling LLM classifier (regex confidence {intent.confidence:.2f} < {HYBRID_CONFIDENCE_THRESHOLD})"
+    )
 
     llm_result = await _classify_intent_with_llm(
         prompt=prompt,
@@ -535,7 +636,33 @@ async def hybrid_parse_intent(
         context_images=context_images,
     )
 
-    return _pick_best_intent(intent, llm_result)
+    if llm_result is None:
+        logger.warning("hybrid_parse_intent: LLM classifier returned None, using regex result")
+        intent.decision_trace = {
+            "source": "regex_llm_failed",
+            "regex_task_type": intent.task_type,
+            "regex_confidence": intent.confidence,
+            "llm_called": True,
+            "llm_error": "LLM classifier returned None",
+            "final_task_type": intent.task_type,
+            "final_confidence": intent.confidence,
+            "reason": "LLM classifier failed, falling back to regex",
+        }
+        return intent
+
+    logger.info(
+        f"hybrid_parse_intent: LLM result = {llm_result.get('task_type')}, "
+        f"confidence = {llm_result.get('confidence', 0):.2f}, reason = {llm_result.get('reason', '')[:60]}"
+    )
+
+    result = _pick_best_intent(intent, llm_result)
+    
+    logger.info(
+        f"hybrid_parse_intent: final decision = {result.task_type}, "
+        f"source = {result.decision_trace.get('source')}, reason = {result.decision_trace.get('reason', '')[:60]}"
+    )
+    
+    return result
 
 
 def validate_agent_result(intent: AgentIntent, result: dict) -> bool:
@@ -794,6 +921,8 @@ async def execute_multi_independent(
 ) -> dict:
     import asyncio
 
+    logger.info(f"execute_multi_independent: start, session_id={session_id}, items={len(intent.items)}")
+
     from sqlalchemy import select
     from app.models.api_provider import ApiProvider
     from app.services.api_manager import resolve_provider_vendor
@@ -808,12 +937,14 @@ async def execute_multi_independent(
     cost_total = 0.0
 
     if not intent.items:
+        logger.error(f"execute_multi_independent: no items to generate")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="无法提取生成子项，请描述更具体")
         return {"error": "无法提取生成子项，请描述更具体", "images": [], "steps": []}
 
     llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
     llm_prov = llm_result.scalar_one_or_none()
     if not llm_prov:
+        logger.error(f"execute_multi_independent: LLM provider not found")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="LLM provider not found")
         return {"error": "LLM provider not found", "images": [], "steps": []}
 
@@ -829,6 +960,8 @@ async def execute_multi_independent(
         getattr(data, "context_messages", None)
     ) or None
 
+    logger.info(f"execute_multi_independent: generating prompts for {len(intent.items)} items")
+
     task_manager.update_task(session_id, TaskStatus.GENERATING,
         message=f"多图并行 | 生成 {len(intent.items)} 个子项的提示词")
 
@@ -842,6 +975,8 @@ async def execute_multi_independent(
         context_images=context_images,
     )
 
+    logger.info(f"execute_multi_independent: prompts generated, count={len(prompts)}")
+
     steps.append({
         "type": "prompt_generation",
         "prompts": prompts,
@@ -851,11 +986,14 @@ async def execute_multi_independent(
         refs = item.reference_urls or intent.references
         tool = registry.get("generate_image")
         if not tool:
+            logger.error(f"execute_multi_independent: generate_image tool not found")
             return {
                 "item_id": item.id, "label": item.label, "url": "",
                 "status": "failed", "error": "generate_image tool not found",
                 "tokens_in": 0, "tokens_out": 0,
             }
+
+        logger.debug(f"execute_multi_independent: generating item {idx+1}/{len(intent.items)}, label={item.label}")
 
         task_manager.update_task(session_id, TaskStatus.GENERATING,
             progress=idx + 1, total=len(intent.items),
@@ -877,6 +1015,8 @@ async def execute_multi_independent(
         t_out = result.meta.get("tokens_out", 0) if result.meta else 0
         status = "ok" if urls else "failed"
         error = result.content if not urls else ""
+
+        logger.info(f"execute_multi_independent: item {idx+1} result, status={status}, urls={len(urls)}")
 
         item_result = {
             "item_id": item.id,
@@ -957,6 +1097,13 @@ async def execute_multi_independent(
     final_output = "已生成:\n" + "\n".join(final_output_parts)
 
     all_urls = [img["url"] for img in final_images if img.get("url")]
+
+    logger.info(
+        f"execute_multi_independent: completed, "
+        f"success={len(all_urls)}/{len(intent.items)}, "
+        f"tokens_in={tokens_in_total}, tokens_out={tokens_out_total}, "
+        f"cost={cost_total:.4f}"
+    )
 
     return {
         "output": final_output,

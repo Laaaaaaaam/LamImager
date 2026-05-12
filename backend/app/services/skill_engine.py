@@ -1,11 +1,8 @@
-from __future__ import annotations
-import json
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.skill import Skill
+from app.schemas.execution import ExecutionPlan, PlanStep
 from app.schemas.skill import SkillCreate, SkillImport, SkillUpdate
 
 
@@ -15,6 +12,8 @@ async def create_skill(db: AsyncSession, data: SkillCreate) -> Skill:
         description=data.description,
         prompt_template=data.prompt_template,
         parameters=data.parameters,
+        strategy=data.strategy,
+        steps=data.steps,
         is_builtin=data.is_builtin,
     )
     db.add(skill)
@@ -64,6 +63,8 @@ async def import_skill(db: AsyncSession, data: SkillImport) -> Skill:
         description=data.description,
         prompt_template=data.prompt_template,
         parameters=data.parameters,
+        strategy=data.strategy,
+        steps=data.steps,
         is_builtin=False,
     )
     db.add(skill)
@@ -72,16 +73,52 @@ async def import_skill(db: AsyncSession, data: SkillImport) -> Skill:
     return skill
 
 
-def apply_skill(prompt: str, skill: Skill, params: dict = None) -> str:
+def apply_skill(prompt: str, skill: Skill, params: dict = None) -> str | ExecutionPlan:
+    if skill.strategy and skill.steps:
+        return skill_to_execution_plan(skill, prompt=prompt, params=params)
+
     template = skill.prompt_template
     if not template:
         return prompt
 
     merged_params = {**(skill.parameters or {}), **(params or {})}
+    result = template.replace("{{prompt}}", prompt).replace("{prompt}", prompt)
+    for key, val in merged_params.items():
+        result = result.replace(f"{{{{{key}}}}}", str(val)).replace(f"{{{key}}}", str(val))
     try:
-        return template.format(prompt=prompt, **merged_params)
+        if "{" in result and "}" in result:
+            result = result.format(prompt=prompt, **merged_params)
     except (KeyError, IndexError):
-        return template.replace("{{prompt}}", prompt).replace("{prompt}", prompt)
+        pass
+    return result
+
+
+def skill_to_execution_plan(skill: Skill, prompt: str = "", params: dict | None = None) -> ExecutionPlan:
+    merged_params = {**(skill.parameters or {}), **(params or {})}
+    steps_raw = skill.steps or []
+    plan_steps: list[PlanStep] = []
+    for i, s in enumerate(steps_raw):
+        step_prompt = s.get("prompt", "")
+        for key, val in merged_params.items():
+            step_prompt = step_prompt.replace(f"{{{{{key}}}}}", str(val))
+        step_prompt = step_prompt.replace("{{prompt}}", prompt).replace("{prompt}", prompt)
+        plan_steps.append(PlanStep(
+            index=i,
+            prompt=step_prompt,
+            negative_prompt=s.get("negative_prompt", ""),
+            description=s.get("description", ""),
+            image_count=s.get("image_count", 1),
+            image_size=s.get("image_size", ""),
+            reference_step_indices=s.get("reference_step_indices"),
+            role=s.get("role", ""),
+            repeat=s.get("repeat", ""),
+        ))
+    return ExecutionPlan(
+        strategy=skill.strategy,
+        steps=plan_steps,
+        source="skill",
+        plan_meta={"skill_id": skill.id, "skill_name": skill.name},
+    )
 
 
 def skill_to_response(skill: Skill) -> dict:
@@ -91,6 +128,8 @@ def skill_to_response(skill: Skill) -> dict:
         "description": skill.description,
         "prompt_template": skill.prompt_template,
         "parameters": skill.parameters or {},
+        "strategy": skill.strategy or "",
+        "steps": skill.steps or [],
         "is_builtin": skill.is_builtin,
         "created_at": skill.created_at,
     }

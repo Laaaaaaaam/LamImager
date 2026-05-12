@@ -120,7 +120,8 @@ class PlanTool(Tool):
             return ToolResult(content=f"未找到模板 {template_id}，请先用 action=list 查看可用模板", meta={"error": "template_not_found"})
         try:
             request = PlanTemplateApplyRequest(variables=variables)
-            steps = await apply_template(db, template_id, request)
+            plan = await apply_template(db, template_id, request)
+            steps = plan.to_steps_dict()
             content_lines = [f"应用模板「{template.name}」，共 {len(steps)} 个步骤："]
             for i, s in enumerate(steps, 1):
                 content_lines.append(f"{i}. {s.get('description', s.get('prompt', '')[:80])}")
@@ -128,6 +129,7 @@ class PlanTool(Tool):
                 "template_name": template.name,
                 "steps": steps,
                 "strategy": template.strategy,
+                "plan": plan.model_dump(),
             }
             if template.strategy == "radiate":
                 meta["items"] = variables.get("items", [])

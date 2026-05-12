@@ -1,22 +1,37 @@
 import base64
 import hashlib
 import os
-import platform
-import uuid
+import logging
+from pathlib import Path
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+logger = logging.getLogger(__name__)
 
-def _get_machine_fingerprint() -> str:
-    node = uuid.getnode()
-    hostname = platform.node()
-    raw = f"{node}:{hostname}"
-    return hashlib.sha256(raw.encode()).hexdigest()
+
+def _get_seed_file_path() -> Path:
+    from app.config import settings
+    return settings.DATA_DIR / ".encryption_seed"
+
+
+def _get_or_create_seed() -> bytes:
+    """Get or create a stable encryption seed file.
+    Uses a file-based seed (not machine fingerprint) so keys survive
+    machine changes, OS reinstalls, and PyInstaller re-bundling.
+    """
+    seed_file = _get_seed_file_path()
+    if seed_file.exists():
+        return seed_file.read_bytes()
+    seed = os.urandom(32)
+    seed_file.parent.mkdir(parents=True, exist_ok=True)
+    seed_file.write_bytes(seed)
+    logger.info("Created new encryption seed at %s", seed_file)
+    return seed
 
 
 def _derive_key() -> bytes:
-    fingerprint = _get_machine_fingerprint()
-    return hashlib.sha256(f"LamImager:{fingerprint}".encode()).digest()
+    seed = _get_or_create_seed()
+    return hashlib.sha256(b"LamImager:v2:" + seed).digest()
 
 
 def encrypt(plaintext: str) -> str:

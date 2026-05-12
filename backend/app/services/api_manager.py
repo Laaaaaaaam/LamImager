@@ -117,14 +117,22 @@ def vendor_to_response(vendor: ApiVendor, model_count: int = 0) -> dict:
 # ── Vendor resolution helper ──────────────────────────────────────
 
 async def resolve_provider_vendor(db: AsyncSession, provider: ApiProvider) -> tuple[str, str]:
-    """Resolve base_url and api_key for a provider, preferring vendor if set."""
+    """Resolve base_url and api_key for a provider, preferring vendor if set.
+    Falls back to provider's own key if vendor decryption fails.
+    """
     if provider.vendor_id:
         vendor = await get_vendor(db, provider.vendor_id)
         if vendor:
-            return vendor.base_url, decrypt(vendor.api_key_enc)
+            try:
+                return vendor.base_url, decrypt(vendor.api_key_enc)
+            except Exception:
+                pass
     if provider.base_url and provider.api_key_enc:
-        return provider.base_url, decrypt(provider.api_key_enc)
-    raise ValueError(f"No vendor or legacy credentials for provider {provider.id}")
+        try:
+            return provider.base_url, decrypt(provider.api_key_enc)
+        except Exception:
+            pass
+    raise ValueError(f"No valid credentials for provider {provider.id}")
 
 
 def resolve_provider_vendor_sync(provider: ApiProvider) -> tuple[Optional[str], Optional[str]]:

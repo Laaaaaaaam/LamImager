@@ -123,16 +123,17 @@ class TaskManager:
 
     async def publish(self, event: LamEvent) -> str:
         sse_id = self._event_log.append(event)
-        session_id = event.payload.get("session_id", "")
         sse_line = self._serialize_sse(event, sse_id)
+        session_id = event.payload.get("session_id", "")
         if session_id:
             self._put_to_session_queues(session_id, sse_line)
-        for q_info in self._queue_registry.values():
-            if q_info[1] is None:
-                try:
-                    q_info[0].put_nowait(sse_line)
-                except asyncio.QueueFull:
-                    pass
+        for q_id, (q, q_sid) in self._queue_registry.items():
+            if q_sid is not None:
+                continue
+            try:
+                q.put_nowait(sse_line)
+            except asyncio.QueueFull:
+                pass
         return sse_id
 
     async def subscribe(self, session_id: str | None = None, last_event_id: str | None = None) -> tuple[str, asyncio.Queue]:

@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 class GenerateImageTool(Tool):
     name = "generate_image"
-    checkpoint = True
     description = (
         "调用图像生成API生成图片。可用于根据提示词生成单张或批量图片。"
         "可传入从 image_search 结果中选取的参考图URL列表 (reference_urls)，"

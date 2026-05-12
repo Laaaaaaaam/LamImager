@@ -42,185 +42,28 @@
     </div>
 
     <div class="chat-area">
-      <div class="messages" ref="messagesContainer">
-        <div v-if="!currentSessionId" class="empty-state">
-          <p>选择或创建一个会话开始</p>
-        </div>
-        <div v-for="msg in messages" :key="msg.id" class="message" :class="msg.role">
-          <div class="message-content" :class="msg.message_type">
-            <button class="msg-copy-btn" @click="copyMessageContent(msg)" title="复制">
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            </button>
-            <template v-if="msg.message_type === 'text'">
-              <div v-html="renderMarkdown(msg.content)"></div>
-            </template>
-            <template v-else-if="msg.message_type === 'image'">
-              <div v-html="renderMarkdown(msg.content)"></div>
-              <div class="image-grid">
-                <div v-for="(url, i) in (msg.metadata?.image_urls || [])" :key="i" class="image-item">
-                  <img :src="url" :alt="'图片 ' + (i + 1)" @click="openImage(url)" @contextmenu.prevent="showImageContextMenu($event, url)" />
-                  <label class="image-check">
-                    <input type="checkbox" :value="url" v-model="selectedImages" />
-                  </label>
-                </div>
-              </div>
-              <div class="image-actions" v-if="(msg.metadata?.image_urls || []).length">
-                <button class="btn btn-sm" @click="downloadSelected" :disabled="!selectedImages.length">
-                  下载选中({{ selectedImages.length }})
-                </button>
-                <button class="btn btn-sm" @click="downloadAll(msg.metadata?.image_urls || [])">全部下载</button>
-                <button class="btn btn-sm" @click="compareSelected" :disabled="selectedImages.length < 2">
-                  对比选中
-                </button>
-                <button class="btn btn-sm" @click="enterRefineMode(msg)" :disabled="!selectedImages.length">
-                  精修({{ selectedImages.length }})
-                </button>
-              </div>
-            </template>
-            <template v-else-if="msg.message_type === 'optimization'">
-              <div v-html="renderMarkdown(msg.content)"></div>
-              <div class="optimization-compare">
-                <div class="compare-side">
-                  <div class="compare-label">原始</div>
-                  <div class="compare-text">{{ msg.metadata?.original }}</div>
-                </div>
-                <div class="compare-side">
-                  <div class="compare-label">优化后</div>
-                  <div class="compare-text optimized">{{ msg.metadata?.optimized }}</div>
-                </div>
-              </div>
-              <button class="btn btn-sm" @click="applyOptimized(msg.metadata?.optimized || '')">应用优化</button>
-              <button class="btn btn-sm" @click="applyOptimized(msg.metadata?.original || '')">使用原始</button>
-            </template>
-            <template v-else-if="msg.message_type === 'plan'">
-              <div class="plan-card">
-                <div class="plan-card-header" @click="togglePlanCard(msg.id)">
-                  <div class="plan-card-title">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
-                    <span v-html="renderMarkdown(msg.content)"></span>
-                  </div>
-                  <div class="plan-card-meta">
-                    <span class="plan-step-count">{{ (msg.metadata?.steps || []).length }} 个步骤</span>
-                    <svg :class="['plan-chevron', { expanded: expandedPlanIds.has(msg.id) }]" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                  </div>
-                </div>
-                <div class="plan-card-body" v-if="expandedPlanIds.has(msg.id) && msg.metadata?.steps">
-                  <div v-for="(step, i) in (msg.metadata.steps as any[])" :key="i" class="plan-card-step">
-                    <div class="plan-step-header">
-                      <span class="step-num">{{ i + 1 }}</span>
-                      <span class="step-prompt-preview">{{ step.description || step.prompt.slice(0, 80) }}{{ (!step.description && step.prompt.length > 80) ? '...' : '' }}</span>
-                    </div>
-                    <div class="plan-step-detail">
-                      <div class="step-field">
-                        <label>Prompt</label>
-                        <p>{{ step.prompt }}</p>
-                      </div>
-                      <div class="step-field" v-if="step.negative_prompt">
-                        <label>Negative Prompt</label>
-                        <p>{{ step.negative_prompt }}</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <template v-else-if="msg.message_type === 'error'">
-              <div class="error-text" v-html="renderMarkdown(msg.content)"></div>
-            </template>
-            <template v-else-if="msg.message_type === 'agent'">
-              <div class="agent-card">
-                <div class="agent-card-header">
-                  <span class="agent-badge">Agent</span>
-                  <span class="agent-cost" v-if="msg.metadata?.cost">费用 ¥{{ (msg.metadata.cost as number)?.toFixed(4) }}</span>
-                </div>
-                <div class="agent-card-content" v-html="renderMarkdown(msg.content)"></div>
-                <div class="agent-card-images" v-if="msg.metadata?.images && (msg.metadata.images as any[]).length">
-                  <img
-                    v-for="(url, i) in (msg.metadata.images as any[])"
-                    :key="i"
-                    :src="url"
-                    class="agent-card-thumb"
-                    @click="openImage(url)"
-                  />
-                </div>
-                <div v-if="msg.metadata?.steps && (msg.metadata.steps as any[]).length" class="agent-steps-v2">
-                  <div
-                    v-for="(step, si) in msg.metadata.steps"
-                    :key="si"
-                    class="step-card"
-                    :class="{ expanded: expandedStepIds.has(msg.id + '-' + si) }"
-                    @click="expandedStepIds.has(msg.id + '-' + si) ? expandedStepIds.delete(msg.id + '-' + si) : expandedStepIds.add(msg.id + '-' + si)"
-                  >
-                    <div class="step-card-row">
-                      <span class="step-card-icon">{{ stepIcon(step) }}</span>
-                      <span class="step-card-name">{{ step.name }}</span>
-                      <span class="step-card-detail" v-if="step.args?.count > 1">×{{ step.args.count }}</span>
-                      <span class="step-card-result" v-if="step.type === 'tool_result'">
-                        <template v-if="step.meta?.image_urls">· {{ (step.meta.image_urls as any[]).length }}张</template>
-                        <template v-else>✓</template>
-                      </span>
-                    </div>
-                    <div class="step-card-body" v-if="expandedStepIds.has(msg.id + '-' + si) && (step.content || step.args)">
-                      <div v-if="step.args" class="step-card-args">
-                        <span v-for="(v, k) in step.args" :key="k" class="step-arg">{{ k }}: {{ typeof v === 'object' ? JSON.stringify(v) : v }}</span>
-                      </div>
-                      <div v-if="step.content" class="step-card-content">{{ step.content }}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </template>
-            <template v-else>
-              <div v-html="renderMarkdown(msg.content)"></div>
-            </template>
-          </div>
-        </div>
-        <div v-if="currentSessionId && isSessionBusy(currentSessionId)" class="message assistant">
-          <div class="message-content generating" v-if="!agentStreamState || agentStreamState.status === 'done'">
-            <div class="generating-indicator">
-              <span class="dot"></span>
-              <span class="dot"></span>
-              <span class="dot"></span>
-            </div>
-            <span class="generating-text">{{ generatingText }}</span>
-            <span v-if="currentTaskLabel" class="task-type-badge">{{ currentTaskLabel }}</span>
-            <span class="task-progress" v-if="getTaskProgress(currentSessionId)">
-              {{ getTaskProgress(currentSessionId) }}
-            </span>
-          </div>
-          <AgentStreamCard
-            v-if="agentStreamState && agentStreamState.status !== 'done'"
-            :state="agentStreamState"
-            @cancel="cancelAgent"
-          />
-        </div>
-      </div>
+      <MessageList
+        ref="messageListRef"
+        :messages="messages"
+        :is-busy="!!(currentSessionId && isSessionBusy(currentSessionId))"
+        :generating-text="generatingText"
+        :task-type-label="currentTaskLabel"
+        :progress-text="getTaskProgress(currentSessionId || '')"
+        :agent-stream-state="agentStreamState"
+        @copy="copyMessageContent"
+        @open-image="openImage"
+        @image-context="showImageContextMenu"
+        @download-selected="downloadSelected"
+        @download-all="(urls: string[]) => downloadAll(urls)"
+        @compare-selected="compareSelectedImages"
+        @enter-refine="enterRefineMode"
+        @apply-optimized="applyOptimized"
+        @cancel="cancelAgent"
+      />
 
-      <div class="compare-overlay" v-if="comparingImages.length" @click.self="comparingImages = []">
-        <div class="compare-view">
-          <div class="compare-header">
-            <span>图片对比（{{ comparingImages.length }}张）</span>
-            <button class="btn btn-sm" @click="comparingImages = []">关闭对比</button>
-          </div>
-          <div class="compare-images">
-            <img v-for="(url, i) in comparingImages" :key="i" :src="url" class="compare-img" />
-          </div>
-          <button class="btn btn-sm" @click="downloadAll(comparingImages)">下载全部</button>
-        </div>
-      </div>
+      <CompareOverlay :images="comparingImages" @close="comparingImages = []" @download-all="downloadAll" />
 
-      <div class="lightbox-overlay" v-if="lightboxUrl" @click.self="lightboxUrl = ''">
-        <div class="lightbox-content">
-          <button class="lightbox-close" @click="lightboxUrl = ''">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
-          <img :src="lightboxUrl" class="lightbox-img" @click.stop />
-          <div class="lightbox-actions">
-            <button class="btn btn-sm" @click="downloadOne(lightboxUrl)">下载</button>
-            <button class="btn btn-sm" @click="openInNewTab(lightboxUrl)">新窗口打开</button>
-          </div>
-        </div>
-      </div>
+      <Lightbox :visible="!!lightboxUrl" :image-url="lightboxUrl" @close="lightboxUrl = ''" @download="downloadOne" />
 
       <div class="input-area" :class="{ 'drag-over': isDragOverMain }"
            @dragenter.prevent="onDragEnterMain"
@@ -230,25 +73,21 @@
         <div v-if="isDragOverMain" class="drag-overlay">
           <span class="drag-overlay-text">释放以添加图片或文档</span>
         </div>
-        <div class="refine-header" v-if="isRefineMode">
-          <span class="refine-label">精修模式</span>
-          <button class="btn btn-sm" @click="exitRefineMode">退出精修</button>
-        </div>
+        <ComposerControls
+          :agent-mode="agentMode" :is-refine-mode="isRefineMode" :is-busy="!!(currentSessionId && isSessionBusy(currentSessionId))"
+          :input-text="inputText" :show-assistant="showAssistant"
+          :image-count="imageCount" :custom-count="customCount"
+          :image-width="imageWidth" :image-height="imageHeight" :no-size-limit="noSizeLimit"
+          @exit-refine="exitRefineMode" @toggle-agent="agentMode = !agentMode" @toggle-assistant="showAssistant = !showAssistant"
+          @send="sendGenerate" @cancel="cancelAgent"
+          @update:image-count="imageCount = $event" @update:custom-count="customCount = $event"
+          @update:image-width="imageWidth = $event" @update:image-height="imageHeight = $event"
+          @update:no-size-limit="noSizeLimit = $event"
+          @open-custom-count="openCustomCount" @clamp-count="clampCount"
+          @upload-image="handleFileUpload($event, 'image')" @upload-doc="handleFileUpload($event, 'doc')"
+        />
         <div class="input-main">
-          <div class="refine-strip" v-if="contextImageList.length">
-            <div v-for="(img, i) in contextImageList" :key="i" class="refine-strip-item">
-              <div class="refine-strip-thumb-wrap">
-                <img :src="img.preview || img.url" class="refine-strip-thumb" />
-                <span class="refine-strip-badge">{{ i + 1 }}</span>
-              </div>
-              <span class="refine-strip-label">{{ img.source === 'upload' ? img.name : (img.source === 'refine' ? '精修' : '上下文') }}</span>
-              <button class="attachment-remove" @click="removeContextImage(i)">x</button>
-            </div>
-            <label class="refine-add-btn" title="追加图片">
-              <input type="file" accept="image/*" multiple @change="handleFileUpload($event, 'image')" hidden />
-              + 追加
-            </label>
-          </div>
+          <ContextImageStrip v-if="contextImageList.length" :images="contextImageList" @remove="removeContextImage" @add-image="processMainFiles" />
           <textarea
             ref="mainTextarea"
             v-model="inputText"
@@ -256,6 +95,8 @@
             rows="2"
             @input="autoResizeTextarea"
             @keydown.enter.exact.prevent="sendGenerate"
+            @dragover.stop.prevent="onDragOverMain"
+            @drop.stop.prevent="onDropMain"
           ></textarea>
           <input
             v-if="!agentMode"
@@ -265,317 +106,44 @@
             placeholder="反向提示词（可选）"
           />
         </div>
-          <div class="input-controls">
-          <div class="input-options">
-            <label class="upload-btn" title="上传图片">
-              <input type="file" accept="image/*" multiple @change="handleFileUpload($event, 'image')" hidden />
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-            </label>
-            <label class="upload-btn" title="上传文档">
-              <input type="file" accept=".txt,.md,.pdf,.doc,.docx" multiple @change="handleFileUpload($event, 'doc')" hidden />
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-            </label>
-          </div>
-          <div v-if="!agentMode" class="input-options">
-            <span class="option-label">数量:</span>
-            <button
-              v-for="n in [1, 2, 4, 8]" :key="n"
-              class="count-btn"
-              :class="{ active: imageCount === n && !customCount }"
-              @click="setCount(n)"
-            >{{ n }}</button>
-            <template v-if="customCount">
-              <input
-                v-model.number="imageCount"
-                type="number"
-                class="count-input"
-                min="1"
-                max="16"
-                @blur="clampCount"
-                @keyup.enter="clampCount"
-                ref="customCountInput"
-              />
-            </template>
-            <button
-              v-else
-              class="count-btn custom-toggle"
-              @click="openCustomCount"
-            >+自定义</button>
-            <span class="option-label size-label">尺寸:</span>
-            <input
-              v-model.number="imageWidth"
-              type="number"
-              class="size-input"
-              :min="noSizeLimit ? undefined : 64"
-              step="1"
-            />
-            <span class="size-sep">×</span>
-            <input
-              v-model.number="imageHeight"
-              type="number"
-              class="size-input"
-              :min="noSizeLimit ? undefined : 64"
-              step="1"
-            />
-            <label class="no-limit-label">
-              <input type="checkbox" v-model="noSizeLimit" />
-              无限制
-            </label>
-          </div>
-          <div class="input-actions">
-            <button class="btn btn-sm" @click="agentMode = !agentMode" :class="{ 'btn-primary': agentMode }" :title="agentMode ? 'Agent 模式' : '正常模式'">
-              智能
-            </button>
-            <button class="btn btn-sm" @click="showAssistant = !showAssistant" :class="{ 'btn-primary': showAssistant }">
-              助手
-            </button>
-            <button class="btn btn-primary btn-sm" @click="sendGenerate" :disabled="!inputText.trim() || (currentSessionId && isSessionBusy(currentSessionId))">
-              {{ (currentSessionId && isSessionBusy(currentSessionId)) ? '任务进行中...' : (isRefineMode ? '精修发送' : (agentMode ? 'Agent发送' : '发送')) }}
-            </button>
-            <button
-              v-if="agentMode && currentSessionId && isSessionBusy(currentSessionId)"
-              class="btn btn-sm btn-danger"
-              @click="cancelAgent"
-            >取消</button>
-          </div>
-        </div>
       </div>
     </div>
 
-    <div class="assistant-sidebar" v-if="showAssistant" :class="{ expanded: assistantExpanded }">
-      <div class="assistant-header">
-        <div class="assistant-tabs">
-          <button
-            v-for="tab in assistantTabs" :key="tab.key"
-            class="tab-btn"
-            :class="{ active: assistantTab === tab.key }"
-            @click="assistantTab = tab.key"
-          >{{ tab.label }}</button>
-        </div>
-        <div class="assistant-header-actions">
-          <button class="btn btn-sm assistant-toggle-btn" @click="assistantExpanded = !assistantExpanded" :title="assistantExpanded ? '收缩' : '展开'">
-            <svg v-if="assistantExpanded" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-            <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-          <button class="btn btn-sm" @click="showAssistant = false">关闭</button>
-        </div>
-      </div>
-
-      <div class="assistant-content">
-        <div v-if="assistantTab === 'dialog'" class="tab-dialog">
-          <div class="dialog-config-bar">
-            <div class="context-toggle" style="border: none; margin-bottom: 0;">
-              <button
-                class="toggle-btn"
-                :class="{ active: responseStyle === 'default' }"
-                @click="responseStyle = 'default'"
-              >默认</button>
-              <button
-                class="toggle-btn"
-                :class="{ active: responseStyle === 'verbose' }"
-                @click="responseStyle = 'verbose'"
-              >详细</button>
-              <button
-                class="toggle-btn"
-                :class="{ active: responseStyle === 'concise' }"
-                @click="responseStyle = 'concise'"
-              >简洁</button>
-            </div>
-            <button class="dialog-settings-btn" :class="{ active: showDialogSettings }" @click="showDialogSettings = !showDialogSettings" title="更多设置">
-              <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-            </button>
-          </div>
-          <div v-if="showDialogSettings" class="dialog-settings-panel">
-            <div class="context-toggle">
-              <button class="toggle-btn" :class="{ active: contextMode === 'shared' }" @click="contextMode = 'shared'">共享上下文</button>
-              <button class="toggle-btn" :class="{ active: contextMode === 'current' }" @click="contextMode = 'current'">仅当前输入</button>
-            </div>
-            <div class="context-toggle" style="margin-top: 6px;">
-              <button class="toggle-btn" :class="{ active: memoryMode === 'global' }" @click="memoryMode = 'global'">全局跨窗口</button>
-              <button class="toggle-btn" :class="{ active: memoryMode === 'session' }" @click="memoryMode = 'session'">仅当前会话</button>
-            </div>
-          </div>
-          <div class="dialog-messages" ref="dialogContainer">
-            <div v-for="m in dialogMessages" :key="m.id" class="dialog-msg" :class="m.role">
-              <template v-if="m.attachments && m.attachments.length">
-                <div class="msg-attachments">
-                  <img v-for="(att, i) in m.attachments" :key="i" v-if="att.type.startsWith('image/')" :src="att.preview" class="msg-attachment-thumb" />
-                </div>
-              </template>
-              <div class="dialog-msg-content" v-html="renderMarkdown(m.content)"></div>
-              <button class="dialog-msg-copy" @click="copyToClipboard(m.content)" title="复制">
-                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              </button>
-            </div>
-          </div>
-          <div v-if="dialogToolCalls.length" class="tool-calls-area">
-            <div v-for="tc in dialogToolCalls" :key="tc.id" class="tool-call-card" :class="{ collapsed: tc.collapsed }">
-              <div class="tool-call-header" @click="tc.collapsed = !tc.collapsed">
-                <span class="tool-call-badge">{{ tc.name === 'web_search' ? '搜索' : tc.name === 'image_search' ? '图片搜索' : tc.name }}</span>
-                <span class="tool-call-status">{{ tc.content ? '完成' : '执行中...' }}</span>
-              </div>
-              <div v-if="!tc.collapsed" class="tool-call-body">
-                <div v-if="tc.content" class="tool-call-content">{{ tc.content }}</div>
-                <div v-else class="tool-call-loading">搜索中...</div>
-              </div>
-            </div>
-          </div>
-          <div class="dialog-actions">
-            <button class="btn btn-sm" @click="saveDialogHistory" :disabled="!dialogMessages.length">保存对话</button>
-            <button class="btn btn-sm" @click="clearDialog" :disabled="!dialogMessages.length">清除对话</button>
-          </div>
-          <div class="dialog-input-area" :class="{ 'drag-over': isDragOverDialog }"
-               @dragenter.prevent="onDragEnterDialog"
-               @dragover.prevent="onDragOverDialog"
-               @dragleave.prevent="onDragLeaveDialog"
-               @drop.prevent="onDropDialog">
-            <div v-if="isDragOverDialog" class="drag-overlay dialog-drag-overlay">
-              <span class="drag-overlay-text">释放以添加文件</span>
-            </div>
-            <div class="dialog-attachment-preview" v-if="dialogAttachments.length">
-              <div v-for="(file, i) in dialogAttachments" :key="i" class="dialog-attachment-item">
-                <img v-if="file.type.startsWith('image/')" :src="file.preview" class="dialog-attachment-thumb" />
-                <span v-else class="dialog-attachment-doc">{{ file.name }}</span>
-                <button class="dialog-attachment-remove" @click="dialogAttachments.splice(i, 1)">x</button>
-              </div>
-            </div>
-            <div class="dialog-input-row">
-              <label class="dialog-upload-btn" title="上传文件">
-                <input type="file" accept="image/*,.txt,.md" multiple @change="handleDialogFileUpload" hidden />
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-              </label>
-              <button class="search-toggle-btn" :class="{ active: searchEnabled }" @click="searchEnabled = !searchEnabled" title="网络搜索">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-              </button>
-              <textarea
-                ref="dialogTextarea"
-                v-model="dialogInput"
-                placeholder="输入消息..."
-                class="dialog-textarea"
-                rows="1"
-                @input="autoResizeDialogTextarea"
-                @keydown.enter.exact.prevent="sendDialog"
-              />
-              <button class="btn btn-sm btn-primary" @click="sendDialog" :disabled="!dialogInput.trim() && !dialogAttachments.length">发送</button>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="assistantTab === 'optimize'" class="tab-optimize">
-          <div class="optimize-directions">
-            <p class="section-title">优化方向（可多选）</p>
-            <label v-for="dir in optimizeDirections" :key="dir.key" class="direction-item">
-              <input type="checkbox" :value="dir.key" v-model="selectedDirections" />
-              <div class="direction-info">
-                <span class="direction-name">{{ dir.label }}</span>
-                <span class="direction-desc">{{ dir.desc }}</span>
-              </div>
-            </label>
-            <label class="direction-item">
-              <input type="checkbox" value="custom" v-model="selectedDirections" />
-              <div class="direction-info">
-                <span class="direction-name">自定义</span>
-                <span class="direction-desc">输入自定义优化指令</span>
-              </div>
-            </label>
-            <textarea
-              v-if="selectedDirections.includes('custom')"
-              v-model="customInstruction"
-              placeholder="输入自定义优化指令..."
-              rows="2"
-              class="custom-input"
-            ></textarea>
-          </div>
-          <div class="optimize-preview">
-            <p class="section-title">当前提示词</p>
-            <div class="preview-text">{{ inputText || '（输入框为空）' }}</div>
-          </div>
-          <button class="btn btn-primary" style="width: 100%" @click="doOptimize" :disabled="!selectedDirections.length || !inputText.trim() || optimizing">
-            {{ optimizing ? '优化中...' : '优化' }}
-          </button>
-          <div v-if="optimizeResult" class="optimize-result">
-            <p class="section-title">优化结果</p>
-            <div class="result-text" :class="{ streaming: optimizing }">{{ optimizeResult }}</div>
-            <button v-if="!optimizing" class="btn btn-sm" @click="applyOptimizeResult" style="margin-top: 8px">应用优化</button>
-          </div>
-        </div>
-
-        <div v-if="assistantTab === 'plan'" class="tab-plan">
-          <div class="plan-template-section">
-            <select v-model="selectedTemplateId" class="template-select" @change="loadTemplate">
-              <option value="">从零开始规划</option>
-              <option v-for="t in planTemplates" :value="t.id">{{ t.name }}</option>
-            </select>
-          </div>
-          <div v-if="templateVariables.length" class="template-variables">
-            <div v-for="v in templateVariables" :key="v.key" class="form-group">
-              <label>{{ v.label }}{{ v.required ? ' *' : '' }}</label>
-              <input v-model="templateVariableValues[v.key]" :placeholder="v.default" type="text" />
-            </div>
-            <button class="btn btn-sm" @click="applyTemplateVariables">应用变量</button>
-          </div>
-          <button class="btn btn-primary" style="width: 100%; margin-bottom: 12px" @click="doPlan" :disabled="!inputText.trim() || planning">
-            {{ planning ? '规划中...' : '生成规划' }}
-          </button>
-          <div v-if="planning && planStreamText" class="plan-streaming">
-            <p class="section-title">正在规划...</p>
-            <div class="stream-text">{{ planStreamText }}</div>
-          </div>
-          <div v-if="planSteps.length" class="plan-steps">
-            <div v-for="(step, i) in planSteps" :key="i" class="plan-step">
-              <div class="step-header">
-                <span>步骤 {{ i + 1 }}</span>
-                <div class="step-actions">
-                  <button class="btn-icon" title="上移" @click="moveStep(i, -1)" :disabled="i === 0">↑</button>
-                  <button class="btn-icon" title="下移" @click="moveStep(i, 1)" :disabled="i === planSteps.length - 1">↓</button>
-                  <button class="btn-icon" title="复制" @click="duplicateStep(i)">⧉</button>
-                  <button class="btn-icon" title="删除" @click="planSteps.splice(i, 1)">×</button>
-                </div>
-              </div>
-              <div class="form-group">
-                <label>提示词</label>
-                <textarea v-model="step.prompt" rows="2"></textarea>
-              </div>
-              <div class="form-group">
-                <label>反向提示词</label>
-                <input v-model="step.negative_prompt" type="text" />
-              </div>
-              <div class="form-group form-row">
-                <label>数量 <input type="number" v-model.number="step.image_count" min="1" max="8" style="width:50px" /></label>
-                <label>尺寸 <input v-model="step.image_size" type="text" :placeholder="noSizeLimit ? '不限' : `${imageWidth}x${imageHeight}`" style="width:100px" /></label>
-              </div>
-              <div class="form-group" v-if="step.description">
-                <label>说明</label>
-                <p class="step-desc">{{ step.description }}</p>
-              </div>
-            </div>
-            <button class="btn btn-sm" @click="planSteps.push({ prompt: '', negative_prompt: '', description: '', image_count: 1 })">+ 添加步骤</button>
-            <div class="plan-summary">
-              预计生成: {{ planSteps.reduce((sum, s) => sum + (s.image_count || 1), 0) }} 张图片
-            </div>
-            <button class="btn btn-primary" style="width: 100%" @click="executePlan">确认并执行</button>
-            <button class="btn btn-sm" style="width: 100%; margin-top: 6px" @click="saveAsTemplate">保存为模板</button>
-          </div>
-        </div>
-
-        <div v-if="assistantTab === 'skill'" class="tab-skills">
-          <p class="section-title">选择技能（可多选）</p>
-          <div v-if="skills.length">
-            <div v-for="skill in skills" :key="skill.id" class="skill-item">
-              <label class="skill-label">
-                <input type="checkbox" :value="skill.id" v-model="selectedSkillIds" />
-                <div class="skill-info">
-                  <span class="skill-name">{{ skill.name }}</span>
-                  <span class="skill-desc">{{ skill.description }}</span>
-                </div>
-              </label>
-            </div>
-          </div>
-          <div v-else class="empty-hint">暂无技能，请在技能管理中创建</div>
-          <p class="hint-text">已选技能将应用于下次生图指令</p>
-        </div>
-      </div>
-    </div>
+    <AssistantSidebar
+      ref="assistantSidebarRef"
+      :show="showAssistant" :tabs="assistantTabs"
+      :response-style="responseStyle" :context-mode="contextMode" :memory-mode="memoryMode"
+      :search-enabled="searchEnabled"
+      :optimize-directions="optimizeDirections"
+      :optimizing="optimizing" :optimize-result="optimizeResult"
+      :input-text="inputText" :image-width="imageWidth" :image-height="imageHeight" :no-size-limit="noSizeLimit"
+      :plan-templates="planTemplates" :selected-template-id="selectedTemplateId"
+      :template-variables="templateVariables" :template-variable-values="templateVariableValues"
+      :plan-steps="planSteps" :planning="planning" :plan-stream-text="planStreamText"
+      :skills="skills"
+      @close="showAssistant = false"
+      @update:response-style="responseStyle = $event"
+      @update:context-mode="contextMode = $event"
+      @update:memory-mode="memoryMode = $event"
+      @update:search-enabled="searchEnabled = $event"
+      @copy-clipboard="copyToClipboard"
+      @save-dialog="saveDialogHistory"
+      @clear-dialog="clearDialog"
+      @send-dialog="sendDialog"
+      @do-optimize="doOptimize"
+      @apply-optimize="applyOptimizeResult"
+      @load-template="loadTemplate"
+      @update-template-var="templateVariableValues[$event.key] = $event.value"
+      @apply-template-variables="applyTemplateVariables"
+      @do-plan="doPlan"
+      @move-step="moveStep"
+      @duplicate-step="duplicateStep"
+      @remove-step="planSteps.splice($event, 1)"
+      @add-step="planSteps.push({ prompt: '', negative_prompt: '', description: '', image_count: 1 })"
+      @execute-plan="executePlan"
+      @save-as-template="saveAsTemplate"
+      @update-plan-step="updatePlanStep"
+    />
 
     <div v-if="planCheckpoint" class="checkpoint-overlay">
       <div class="checkpoint-card">
@@ -597,14 +165,12 @@
       @skip="resolveAgentCheckpoint(true)"
     />
 
-    <div v-if="contextMenu.show" class="context-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }">
-      <button @click="renameSession(contextMenu.sessionId!)">重命名</button>
-      <button @click="deleteSession(contextMenu.sessionId!)">删除</button>
-    </div>
-    <div v-if="imageContextMenu.show" class="context-menu" :style="{ left: imageContextMenu.x + 'px', top: imageContextMenu.y + 'px' }">
-      <button v-if="!isContextPinned(imageContextMenu.url)" @click="toggleContextPin(imageContextMenu.url)">加入上下文</button>
-      <button v-else @click="toggleContextPin(imageContextMenu.url)">从上下文移除</button>
-    </div>
+    <ContextMenu :visible="contextMenu.show" :x="contextMenu.x" :y="contextMenu.y"
+      :items="[{ label: '重命名', action: 'rename' }, { label: '删除', action: 'delete' }]"
+      @action="(a: string) => contextMenuAction(a)" />
+    <ContextMenu :visible="imageContextMenu.show" :x="imageContextMenu.x" :y="imageContextMenu.y"
+      :items="contextMenuImageItems"
+      @action="(a: string) => imageContextAction(a)" />
   </div>
 </template>
 
@@ -620,13 +186,21 @@ import { useBillingStore } from '../stores/billing'
 import type { Skill, DefaultModelsConfig, TaskHandle, TaskUpdateEvent, PlanStep, PlanTemplate, TemplateVariable, AgentStreamState, LamEvent } from '../types'
 import { dialog } from '../composables/useDialog'
 import { useSessionEvents } from '../composables/useSessionEvents'
-import AgentStreamCard from '../components/session/AgentStreamCard.vue'
 import CheckpointOverlay from '../components/session/CheckpointOverlay.vue'
+import Lightbox from '../components/session/Lightbox.vue'
+import CompareOverlay from '../components/session/CompareOverlay.vue'
+import ContextMenu from '../components/session/ContextMenu.vue'
+import ContextImageStrip from '../components/session/ContextImageStrip.vue'
+import ComposerControls from '../components/session/ComposerControls.vue'
+import MessageList from '../components/session/MessageList.vue'
+import AssistantSidebar from '../components/session/AssistantSidebar.vue'
 import { planTemplateApi } from '../api/planTemplate'
 
 const store = useSessionStore()
 const providerStore = useProviderStore()
 const billingStore = useBillingStore()
+const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
+const assistantSidebarRef = ref<InstanceType<typeof AssistantSidebar> | null>(null)
 const sessions = computed(() => store.sessions)
 const currentSessionId = computed(() => store.currentSessionId)
 const messages = computed(() => store.messages)
@@ -634,7 +208,6 @@ const messages = computed(() => store.messages)
 const inputText = ref('')
 const agentMode = ref(false)
 const agentStreamState = ref<AgentStreamState | null>(null)
-const expandedStepIds = ref(new Set<string>())
 const agentCheckpointState = ref<{ visible: boolean; message: string; toolName?: string; previewUrl?: string; correlationId?: string }>({
   visible: false,
   message: '',
@@ -662,13 +235,8 @@ function downloadAll(urls: string[]) {
   })
 }
 
-function downloadSelected() {
-  downloadAll(selectedImages.value)
-}
-
-function setCount(n: number) {
-  imageCount.value = n
-  customCount.value = false
+function downloadSelected(urls: string[]) {
+  downloadAll(urls)
 }
 
 function openCustomCount() {
@@ -686,8 +254,6 @@ const imageWidth = ref(1024)
 const imageHeight = ref(1024)
 const noSizeLimit = ref(false)
 const showAssistant = ref(false)
-const assistantTab = ref('dialog')
-const selectedImages = ref<string[]>([])
 const comparingImages = ref<string[]>([])
 const isRefineMode = ref(false)
 
@@ -743,7 +309,6 @@ const optimizing = ref(false)
 const planning = ref(false)
 const mainTextarea = ref<HTMLTextAreaElement | null>(null)
 const sessionListCollapsed = ref(false)
-const assistantExpanded = ref(false)
 
 interface Attachment {
   name: string
@@ -754,12 +319,9 @@ interface Attachment {
 }
 
 const attachments = ref<Attachment[]>([])
-const dialogAttachments = ref<Attachment[]>([])
 
 const dragCounterMain = ref(0)
-const dragCounterDialog = ref(0)
 const isDragOverMain = computed(() => dragCounterMain.value > 0)
-const isDragOverDialog = computed(() => dragCounterDialog.value > 0)
 
 const assistantTabs = [
   { key: 'dialog', label: '对话' },
@@ -770,26 +332,8 @@ const assistantTabs = [
 
 const contextMode = ref<'shared' | 'current'>('shared')
 const memoryMode = ref<'global' | 'session'>('global')
-const dialogMessages = ref<{ id: number; role: string; content: string; attachments?: Attachment[] }[]>([])
-
-const savedMemoryMode = localStorage.getItem('assistantMemoryMode')
-if (savedMemoryMode === 'global' || savedMemoryMode === 'session') {
-  memoryMode.value = savedMemoryMode
-}
-
-const savedDialog = localStorage.getItem('assistantDialogHistory')
-if (savedDialog) {
-  try {
-    dialogMessages.value = JSON.parse(savedDialog)
-  } catch { /* ignore */ }
-}
-const dialogInput = ref('')
-const dialogTextarea = ref<HTMLTextAreaElement | null>(null)
-const dialogContainer = ref<HTMLElement | null>(null)
 const responseStyle = ref<'default' | 'verbose' | 'concise'>('default')
-const showDialogSettings = ref(false)
 const searchEnabled = ref(false)
-const dialogToolCalls = ref<{ id: string; name: string; args: any; content: string; collapsed: boolean }[]>([])
 
 const optimizeDirections = [
   { key: 'detail_enhancement', label: '细节增强', desc: '提升画面细节与清晰度' },
@@ -798,8 +342,6 @@ const optimizeDirections = [
   { key: 'color_adjustment', label: '色彩调整', desc: '优化色彩搭配与氛围' },
   { key: 'lighting_enhancement', label: '光影增强', desc: '增强光影效果与层次' },
 ]
-const selectedDirections = ref<string[]>([])
-const customInstruction = ref('')
 const optimizeResult = ref('')
 
 const planStrategies = [
@@ -813,7 +355,8 @@ const selectedTemplateId = ref('')
 const templateVariables = ref<TemplateVariable[]>([])
 const templateVariableValues = ref<Record<string, string>>({})
 
-async function loadTemplate() {
+async function loadTemplate(id?: string) {
+  if (id !== undefined) selectedTemplateId.value = id
   if (!selectedTemplateId.value) {
     templateVariables.value = []
     templateVariableValues.value = {}
@@ -851,7 +394,7 @@ async function applyTemplateVariables() {
 const planSteps = ref<PlanStep[]>([])
 const planStreamText = ref('')
 const skills = ref<Skill[]>([])
-const selectedSkillIds = ref<string[]>([])
+const selectedSkillIds = computed(() => assistantSidebarRef.value?.selectedSkillIds || [])
 
 const defaultModels = ref<DefaultModelsConfig>({
   default_optimize_provider_id: null,
@@ -864,7 +407,6 @@ const defaultModels = ref<DefaultModelsConfig>({
 
 const contextMenu = ref({ show: false, x: 0, y: 0, sessionId: null as string | null })
 const imageContextMenu = ref({ show: false, x: 0, y: 0, url: '' })
-const messagesContainer = ref<HTMLElement | null>(null)
 let contextMenuTimer: ReturnType<typeof setTimeout> | null = null
 
 function isSessionBusy(sessionId: string): boolean {
@@ -883,16 +425,6 @@ function getTaskProgress(sessionId: string): string {
   const task = activeTasks.value.get(sessionId)
   if (!task || task.status !== 'running' || !task.total) return ''
   return `${task.progress}/${task.total}`
-}
-
-function stepIcon(step: any): string {
-  const icons: Record<string, string> = {
-    web_search: '搜',
-    image_search: '图',
-    generate_image: '画',
-    plan: '策',
-  }
-  return icons[step.name] || '○'
 }
 
 const TASK_TYPE_LABELS: Record<string, string> = {
@@ -1049,31 +581,6 @@ onUnmounted(() => {
 
 watch(messages, () => {
   refreshAutoContext()
-  nextTick(() => {
-    if (messagesContainer.value) {
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-    }
-  })
-})
-
-watch(dialogMessages, (val) => {
-  if (memoryMode.value === 'global') {
-    localStorage.setItem('assistantDialogHistory', JSON.stringify(val))
-  }
-  nextTick(() => {
-    if (dialogContainer.value) {
-      dialogContainer.value.scrollTop = dialogContainer.value.scrollHeight
-    }
-  })
-}, { deep: true })
-
-watch(memoryMode, (val) => {
-  localStorage.setItem('assistantMemoryMode', val)
-  if (val === 'session') {
-    localStorage.removeItem('assistantDialogHistory')
-  } else {
-    localStorage.setItem('assistantDialogHistory', JSON.stringify(dialogMessages.value))
-  }
 })
 
 
@@ -1086,13 +593,6 @@ async function handleFileUpload(event: Event, _type: 'image' | 'doc') {
   const input = event.target as HTMLInputElement
   if (!input.files) return
   await processMainFiles(input.files)
-  input.value = ''
-}
-
-async function handleDialogFileUpload(event: Event) {
-  const input = event.target as HTMLInputElement
-  if (!input.files) return
-  await processDialogFiles(input.files)
   input.value = ''
 }
 
@@ -1132,41 +632,6 @@ async function processMainFiles(files: FileList) {
   }
 }
 
-function onDragEnterDialog(_e: DragEvent) {
-  dragCounterDialog.value++
-}
-
-function onDragOverDialog(e: DragEvent) {
-  e.dataTransfer!.dropEffect = 'copy'
-}
-
-function onDragLeaveDialog(_e: DragEvent) {
-  dragCounterDialog.value--
-}
-
-async function onDropDialog(e: DragEvent) {
-  dragCounterDialog.value = 0
-  const files = e.dataTransfer?.files
-  if (!files || !files.length) return
-  await processDialogFiles(files)
-}
-
-async function processDialogFiles(files: FileList) {
-  for (const file of files) {
-    const attachment: Attachment = {
-      name: file.name,
-      type: file.type,
-      size: file.size,
-    }
-    if (file.type.startsWith('image/')) {
-      attachment.preview = await readFileAsDataURL(file)
-    } else if (file.name.match(/\.(txt|md)$/i) || file.type === 'text/plain') {
-      attachment.content = await readFileAsText(file)
-    }
-    dialogAttachments.value.push(attachment)
-  }
-}
-
 function readFileAsDataURL(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -1190,14 +655,6 @@ function autoResizeTextarea() {
   if (!textarea) return
   textarea.style.height = 'auto'
   const newHeight = Math.min(textarea.scrollHeight, 200)
-  textarea.style.height = newHeight + 'px'
-}
-
-function autoResizeDialogTextarea() {
-  const textarea = dialogTextarea.value
-  if (!textarea) return
-  textarea.style.height = 'auto'
-  const newHeight = Math.min(textarea.scrollHeight, 120)
   textarea.style.height = newHeight + 'px'
 }
 
@@ -1244,57 +701,10 @@ function copyMessageContent(msg: MsgLike) {
   copyToClipboard(getMessageCopyText(msg))
 }
 
-function renderMarkdown(text: string): string {
-  const codeBlocks: string[] = []
-
-  let html = text
-    .replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      codeBlocks.push(`<pre><code>${escaped.trim()}</code></pre>`)
-      return `\x00CB${codeBlocks.length - 1}\x00`
-    })
-    .replace(/`([^`]+)`/g, (_, code) => {
-      const escaped = code.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      codeBlocks.push(`<code>${escaped}</code>`)
-      return `\x00CB${codeBlocks.length - 1}\x00`
-    })
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
-  html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>')
-
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>')
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>')
-
-  html = html.replace(/^>\s?(.+)$/gm, '<blockquote>$1</blockquote>')
-
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank">$1</a>')
-
-  html = html.replace(/^(\d+)\.\s(.+)$/gm, '<li value="$1">$2</li>')
-  html = html.replace(/^[-*]\s(.+)$/gm, '<li>$1</li>')
-
-  html = html.replace(/(<li[^>]*>[\s\S]*?<\/li>\n?)+/g, (match) => {
-    return `<${/value=/.test(match) ? 'ol' : 'ul'}>${match}</${/value=/.test(match) ? 'ol' : 'ul'}>`
-  })
-
-  html = html.replace(/---+/g, '<hr>')
-  html = html.replace(/\n\s*\n/g, '\n')
-  html = html.replace(/\n/g, '<br>')
-
-  if (!/^<(?:h[1-3]|pre|ul|ol|blockquote|hr)/.test(html.trim())) {
-    html = `<p>${html}</p>`
-  }
-
-  html = html.replace(/\x00CB(\d+)\x00/g, (_, i) => codeBlocks[parseInt(i)])
-
-  return html
-}
-
 function saveDialogHistory() {
-  if (!dialogMessages.value.length) return
-  const history = dialogMessages.value.map(m => {
+  const msgs = assistantSidebarRef.value?.dialogMessages
+  if (!msgs || !msgs.length) return
+  const history = msgs.map(m => {
     const role = m.role === 'user' ? '用户' : '助手'
     return `[${role}]\n${m.content}`
   }).join('\n\n---\n\n')
@@ -1309,9 +719,7 @@ function saveDialogHistory() {
 
 async function clearDialog() {
   if (await dialog.showConfirm('确定要清除当前对话吗？建议先保存对话记录。')) {
-    dialogMessages.value.length = 0
-    dialogToolCalls.value.length = 0
-    localStorage.removeItem('assistantDialogHistory')
+    assistantSidebarRef.value?.clearDialog()
   }
 }
 
@@ -1324,15 +732,12 @@ async function newSession() {
   imageWidth.value = 1024
   imageHeight.value = 1024
   noSizeLimit.value = false
-  selectedDirections.value = []
-  customInstruction.value = ''
   optimizeResult.value = ''
   await store.createSession()
 }
 
 async function selectSession(id: string) {
   await store.selectSession(id)
-  selectedImages.value = []
   clearContextImages()
   inputText.value = ''
   negativePrompt.value = ''
@@ -1341,11 +746,9 @@ async function selectSession(id: string) {
   imageWidth.value = 1024
   imageHeight.value = 1024
   noSizeLimit.value = false
-  selectedDirections.value = []
-  customInstruction.value = ''
   optimizeResult.value = ''
   if (memoryMode.value === 'session') {
-    dialogMessages.value.length = 0
+    assistantSidebarRef.value?.clearDialog()
   }
   refreshAutoContext()
 }
@@ -1437,6 +840,14 @@ async function sendGenerate() {
         entry.image_urls = urls
       }
     }
+    if (m.message_type === 'agent' && m.metadata?.images && Array.isArray(m.metadata.images)) {
+      const urls = (m.metadata.images as string[]).filter((url: string) =>
+        url.startsWith('http')
+      )
+      if (urls.length) {
+        entry.image_urls = urls.slice(0, 2)
+      }
+    }
     return entry
   })
 
@@ -1454,8 +865,8 @@ async function sendGenerate() {
       negative_prompt: negativePrompt.value,
       image_count: imageCount.value,
       image_size: noSizeLimit.value ? undefined : `${imageWidth.value}x${imageHeight.value}`,
-      optimize_directions: selectedDirections.value.filter(d => d !== 'custom'),
-      custom_optimize_instruction: customInstruction.value,
+      optimize_directions: assistantSidebarRef.value?.selectedDirections.filter(d => d !== 'custom') || [],
+      custom_optimize_instruction: assistantSidebarRef.value?.customInstruction || '',
       reference_images: referenceImages.length ? referenceImages : undefined,
       reference_labels: refLabels.length ? refLabels : undefined,
       context_messages: contextMessages,
@@ -1470,7 +881,6 @@ async function sendGenerate() {
     await store.generate(sid, generateData)
     inputText.value = ''
     negativePrompt.value = ''
-    selectedImages.value = []
     attachments.value = []
     clearContextImages()
     if (isRefineMode.value) {
@@ -1489,36 +899,22 @@ async function sendGenerate() {
 }
 
 const lightboxUrl = ref('')
-const expandedPlanIds = ref<Set<string>>(new Set())
-
-function togglePlanCard(msgId: string) {
-  if (expandedPlanIds.value.has(msgId)) {
-    expandedPlanIds.value.delete(msgId)
-  } else {
-    expandedPlanIds.value.add(msgId)
-  }
-  expandedPlanIds.value = new Set(expandedPlanIds.value)
-}
 
 function openImage(url: string) {
   lightboxUrl.value = url
 }
 
-function openInNewTab(url: string) {
-  window.open(url, '_blank')
+function compareSelectedImages(urls: string[]) {
+  comparingImages.value = [...urls]
 }
 
-function compareSelected() {
-  comparingImages.value = [...selectedImages.value]
-}
-
-function enterRefineMode(_msg?: any) {
+function enterRefineMode(_msg?: any, urls?: string[]) {
   isRefineMode.value = true
   clearContextImages()
-  selectedImages.value.forEach((url, i) => {
+  const imageUrls = urls || []
+  imageUrls.forEach((url: string, i: number) => {
     addContextImage(url, 'refine', `图${i + 1}`)
   })
-  selectedImages.value = []
   inputText.value = ''
 }
 
@@ -1559,17 +955,19 @@ function applyOptimized(text: string) {
 let dialogMsgId = 0
 
 async function sendDialog() {
-  if (!dialogInput.value.trim() && !dialogAttachments.value.length) return
-  const userMsg = dialogInput.value
-  const currentAttachments = [...dialogAttachments.value]
-  dialogInput.value = ''
-  dialogAttachments.value = []
+  const sidebar = assistantSidebarRef.value
+  if (!sidebar) return
+  if (!sidebar.dialogInput.trim() && !sidebar.dialogAttachments.length) return
+  const userMsg = sidebar.dialogInput
+  const currentAttachments = [...sidebar.dialogAttachments]
+  sidebar.dialogInput = ''
+  sidebar.dialogAttachments = []
 
   const llmProviders = providerStore.providers.filter(p => p.provider_type === 'llm' && p.is_active)
   const providerId = defaultModels.value.default_optimize_provider_id || (llmProviders.length ? llmProviders[0].id : '')
 
   if (!providerId) {
-    dialogMessages.value.push({ id: ++dialogMsgId, role: 'assistant', content: '请先在设置中配置LLM提供商' })
+    sidebar.dialogMessages.push({ id: ++dialogMsgId, role: 'assistant', content: '请先在设置中配置LLM提供商' })
     return
   }
 
@@ -1592,8 +990,20 @@ async function sendDialog() {
       ? messages.value.slice(-10).map(m => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`).join('\n') + '\n'
       : ''
 
+    const contextImageUrls: string[] = []
+    if (contextMode.value === 'shared' && currentSessionId.value) {
+      for (const m of messages.value.slice(-10)) {
+        if (m.metadata?.image_urls && Array.isArray(m.metadata.image_urls)) {
+          for (const url of (m.metadata.image_urls as string[]).slice(0, 1)) {
+            contextImageUrls.push(url)
+          }
+        }
+      }
+      contextImageUrls.splice(2)
+    }
+
     const userMsgId = ++dialogMsgId
-    dialogMessages.value.push({ id: userMsgId, role: 'user', content: userMsg, attachments: currentAttachments })
+    sidebar.dialogMessages.push({ id: userMsgId, role: 'user', content: userMsg, attachments: currentAttachments })
 
     const responseHint = responseStyle.value === 'verbose'
       ? '请给出详细、全面的回答，展开解释每个要点。'
@@ -1602,38 +1012,49 @@ async function sendDialog() {
         : ''
 
     const systemPrompt = (contextMode.value === 'shared'
-      ? '你是一个AI生图助手。你可以参考上下文中的对话来回答问题。请用中文回复。不要重复或总结上下文对话内容，直接回答用户当前问题。'
+      ? '你是一个AI生图助手。你可以参考上下文中的对话和已生成图片来回答问题。请用中文回复。不要重复或总结上下文对话内容，直接回答用户当前问题。'
       : '你是一个AI生图助手。请根据用户输入回答问题。请用中文回复。') + responseHint
 
-    const llmMessages: { role: string; content: string }[] = [
+    const llmMessages: { role: string; content: string | { type: string; text?: string; image_url?: { url: string; detail: string } }[] }[] = [
       { role: 'system', content: systemPrompt },
     ]
-    const history = dialogMessages.value.slice(0, -1).slice(-20)
+    const history = sidebar.dialogMessages.slice(0, -1).slice(-20)
     for (const m of history) {
       llmMessages.push({ role: m.role, content: m.content })
     }
-    llmMessages.push({ role: 'user', content: context + messageContent })
+    const finalText = context + messageContent
+    if (contextImageUrls.length) {
+      const parts: { type: string; text?: string; image_url?: { url: string; detail: string } }[] = [
+        { type: 'text', text: finalText },
+      ]
+      for (const url of contextImageUrls) {
+        parts.push({ type: 'image_url', image_url: { url, detail: 'auto' } })
+      }
+      llmMessages.push({ role: 'user', content: parts } as any)
+    } else {
+      llmMessages.push({ role: 'user', content: finalText })
+    }
 
     const assistantMsgId = ++dialogMsgId
-    dialogMessages.value.push({ id: assistantMsgId, role: 'assistant', content: '' })
+    sidebar.dialogMessages.push({ id: assistantMsgId, role: 'assistant', content: '' })
 
     let fullContent = ''
     streamAbortController = new AbortController()
     if (searchEnabled.value) {
-      dialogToolCalls.value = []
+      sidebar.dialogToolCalls = []
       const stream = promptApi.streamChatWithTools(llmMessages, providerId, ['web_search', 'image_search'], currentSessionId.value, 0.7, streamAbortController.signal)
 
       for await (const event of stream) {
         if (event.type === 'token') {
           fullContent += event.data as string
-          const msg = dialogMessages.value.find(m => m.id === assistantMsgId)
+          const msg = sidebar.dialogMessages.find(m => m.id === assistantMsgId)
           if (msg) msg.content = fullContent
         } else if (event.type === 'tool_call') {
           const tc = event.data as { name: string; args?: Record<string,unknown> }
-          dialogToolCalls.value.push({ id: crypto.randomUUID(), name: tc.name, args: tc.args, content: '', collapsed: false })
+          sidebar.dialogToolCalls.push({ id: crypto.randomUUID(), name: tc.name, args: tc.args, content: '', collapsed: false })
         } else if (event.type === 'tool_result') {
           const tr = event.data as { name: string; content: string; meta?: Record<string,unknown> }
-          const tool = dialogToolCalls.value.find(t => t.name === tr.name && !t.content)
+          const tool = sidebar.dialogToolCalls.find(t => t.name === tr.name && !t.content)
           if (tool) tool.content = tr.content
         }
       }
@@ -1642,7 +1063,7 @@ async function sendDialog() {
 
       for await (const token of stream) {
         fullContent += token
-        const msg = dialogMessages.value.find(m => m.id === assistantMsgId)
+        const msg = sidebar.dialogMessages.find(m => m.id === assistantMsgId)
         if (msg) msg.content = fullContent
       }
     }
@@ -1652,20 +1073,22 @@ async function sendDialog() {
     billingStore.fetchSummary()
     await store.fetchSessions()
   } catch (e: any) {
-    dialogMessages.value.push({ id: ++dialogMsgId, role: 'assistant', content: '对话失败: ' + (e.message || '未知错误') })
+    sidebar.dialogMessages.push({ id: ++dialogMsgId, role: 'assistant', content: '对话失败: ' + (e.message || '未知错误') })
   }
 }
 
 async function doOptimize() {
-  if (!inputText.value.trim() || !selectedDirections.value.length || optimizing.value) return
+  const dirs = assistantSidebarRef.value?.selectedDirections || []
+  const custom = assistantSidebarRef.value?.customInstruction || ''
+  if (!inputText.value.trim() || !dirs.length || optimizing.value) return
   const sid = currentSessionId.value
   if (!sid) return
   optimizing.value = true
   optimizeResult.value = ''
   try {
-    let directions = selectedDirections.value.filter(d => d !== 'custom').join(',')
-    if (customInstruction.value) {
-      directions = directions ? directions + ',custom:' + customInstruction.value : 'custom:' + customInstruction.value
+    let directions = dirs.filter(d => d !== 'custom').join(',')
+    if (custom) {
+      directions = directions ? directions + ',custom:' + custom : 'custom:' + custom
     }
     const providerId = defaultModels.value.default_optimize_provider_id || ''
     if (!providerId) {
@@ -1735,7 +1158,7 @@ async function doPlan() {
   planning.value = true
   planStreamText.value = ''
   try {
-    const optimizeDirs = selectedDirections.value.filter(d => d !== 'custom').join(', ') || '无'
+    const optimizeDirs = (assistantSidebarRef.value?.selectedDirections || []).filter(d => d !== 'custom').join(', ') || '无'
     const hasRefs = attachments.value.some(a => a.type.startsWith('image/'))
     const size = noSizeLimit.value ? '不限' : `${imageWidth.value}x${imageHeight.value}`
     const strategyDesc = planStrategies.find(s => s.key === selectedPlanStrategy.value)?.desc || '并发生成'
@@ -1844,6 +1267,13 @@ function duplicateStep(index: number) {
   planSteps.value.splice(index + 1, 0, { ...step, description: (step.description || '') + ' (副本)' })
 }
 
+function updatePlanStep(payload: { index: number; field: string; value: any }) {
+  const step = planSteps.value[payload.index]
+  if (step) {
+    (step as any)[payload.field] = payload.value
+  }
+}
+
 const planCheckpoint = ref<{ stepIndex: number; message: string } | null>(null)
 let planCheckpointResolve: (() => void) | null = null
 
@@ -1864,11 +1294,6 @@ async function executePlan() {
   })
   generatingText.value = '规划执行中...'
 
-  const errors: string[] = []
-  let completed = 0
-
-  let lastStepImageUrls: string[] = []
-
   const initialRefs: string[] = []
   for (const img of contextImageList.value) {
     if (img.preview && img.source === 'upload') {
@@ -1879,94 +1304,21 @@ async function executePlan() {
     }
   }
 
-  async function runStep(step: PlanStep, index: number, referenceImages?: string[]) {
-    try {
-      const ctxUrls = contextImageList.value
-        .filter(img => img.source === 'context')
-        .map(img => img.url)
-      const ctxMsgs = messages.value.slice(-10).map(m => {
-        const entry: { role: string; content: string; image_urls?: string[] } = {
-          role: m.role,
-          content: m.content,
-        }
-        if (m.message_type === 'image' && m.metadata?.image_urls && ctxUrls.length) {
-          const urls = (m.metadata.image_urls as string[]).filter(url => ctxUrls.includes(url))
-          if (urls.length) entry.image_urls = urls
-        }
-        return entry
-      })
-      const refLabels = (referenceImages || []).map((_, i) => ({
-        index: i + 1,
-        source: 'refine' as const,
-        name: `步骤${index + 1}参考图${i + 1}`,
-      }))
-      const result = await store.generate(sid, {
-        prompt: step.prompt,
-        negative_prompt: step.negative_prompt,
-        image_count: step.image_count || imageCount.value,
-        image_size: step.image_size || (noSizeLimit.value ? undefined : `${imageWidth.value}x${imageHeight.value}`),
-        plan_strategy: strategy,
-        reference_images: referenceImages,
-        context_messages: ctxMsgs.length ? ctxMsgs : undefined,
-        reference_labels: refLabels.length ? refLabels : undefined,
-      })
-      if (result?.image_urls?.length) {
-        lastStepImageUrls = result.image_urls
-      }
-    } catch (e: any) {
-      errors.push(`步骤${index + 1}失败: ${e.message || '未知错误'}`)
-    } finally {
-      completed++
-      const task = activeTasks.value.get(sid)
-      if (task) task.progress = completed
-    }
-  }
-
-  async function runStepWithCheckpoint(step: PlanStep, index: number, referenceImages?: string[]) {
-    await runStep(step, index, referenceImages)
-    if (step.checkpoint?.enabled) {
-      planCheckpoint.value = {
-        stepIndex: index,
-        message: step.checkpoint.message || `步骤${index + 1}已完成，请确认后继续`,
-      }
-      await new Promise<void>((resolve) => { planCheckpointResolve = resolve })
-      planCheckpoint.value = null
-      planCheckpointResolve = null
-    }
-  }
-
-  if (strategy === 'parallel') {
-    const concurrency = Math.min(defaultModels.value.max_concurrent, steps.length)
-    let nextIndex = 0
-    const workers: Promise<void>[] = []
-    for (let i = 0; i < concurrency && nextIndex < steps.length; i++) {
-      workers.push((async () => {
-        while (nextIndex < steps.length) {
-          const idx = nextIndex++
-          await runStepWithCheckpoint(steps[idx], idx, initialRefs.length ? initialRefs : undefined)
-        }
-      })())
-    }
-    await Promise.all(workers)
-  } else if (strategy === 'iterative') {
-    for (let i = 0; i < steps.length; i++) {
-      const task = activeTasks.value.get(sid)
-      if (task) generatingText.value = `迭代 ${i + 1}/${steps.length}`
-      let refs: string[] | undefined
-      if (i === 0 && initialRefs.length) {
-        refs = initialRefs
-      } else if (i > 0 && lastStepImageUrls.length) {
-        const base64 = await fetchImageAsBase64(lastStepImageUrls[0])
-        if (base64) refs = [base64]
-      }
-      await runStepWithCheckpoint(steps[i], i, refs)
-    }
-  } else {
-    for (let i = 0; i < steps.length; i++) {
-      const task = activeTasks.value.get(sid)
-      if (task) generatingText.value = `步骤 ${i + 1}/${steps.length}`
-      await runStepWithCheckpoint(steps[i], i, initialRefs.length ? initialRefs : undefined)
-    }
+  try {
+    await sessionApi.executePlan(sid, {
+      strategy,
+      steps: steps.map(s => ({
+        prompt: s.prompt,
+        negative_prompt: s.negative_prompt,
+        description: s.description,
+        image_count: s.image_count || imageCount.value,
+        image_size: s.image_size || (noSizeLimit.value ? '' : `${imageWidth.value}x${imageHeight.value}`),
+      })),
+      reference_images: initialRefs.length ? initialRefs : undefined,
+      image_size: noSizeLimit.value ? '1024x1024' : `${imageWidth.value}x${imageHeight.value}`,
+    })
+  } catch (e: any) {
+    dialog.showAlert('规划执行失败: ' + (e.message || '未知错误'))
   }
 
   const task = activeTasks.value.get(sid)
@@ -1975,9 +1327,6 @@ async function executePlan() {
   planSteps.value = []
   billingStore.fetchSummary()
   await store.fetchSessions()
-  if (errors.length) {
-    dialog.showAlert(`部分步骤执行失败:\n${errors.join('\n')}`)
-  }
 }
 
 function continuePlan() {
@@ -2102,6 +1451,19 @@ async function renameSession(id: string) {
 async function deleteSession(id: string) {
   if (await dialog.showConfirm('删除此会话？')) await store.deleteSession(id)
   contextMenu.value.show = false
+}
+
+const contextMenuImageItems = computed(() => [
+  { label: isContextPinned(imageContextMenu.value.url) ? '从上下文移除' : '加入上下文', action: 'toggle' },
+])
+
+function contextMenuAction(action: string) {
+  if (action === 'rename') renameSession(contextMenu.value.sessionId!)
+  else if (action === 'delete') deleteSession(contextMenu.value.sessionId!)
+}
+
+function imageContextAction(action: string) {
+  if (action === 'toggle') toggleContextPin(imageContextMenu.value.url)
 }
 
 watch(selectedSkillIds, (ids) => {
@@ -2270,814 +1632,6 @@ watch(selectedSkillIds, (ids) => {
   min-width: 0;
 }
 
-.messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-}
-
-.message {
-  margin-bottom: 12px;
-}
-
-.message-content {
-  position: relative;
-}
-
-.message.user {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.message.user .message-content {
-  background: var(--hover);
-  color: var(--text);
-  border-radius: 12px 12px 2px 12px;
-  padding: 8px 14px;
-  max-width: 70%;
-}
-
-.message.assistant .message-content,
-.message.system .message-content {
-  max-width: 85%;
-}
-
-.msg-copy-btn {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-  color: var(--text-secondary);
-  z-index: 5;
-}
-
-.message-content:hover .msg-copy-btn {
-  opacity: 0.7;
-}
-
-.msg-copy-btn:hover {
-  opacity: 1 !important;
-  background: var(--hover);
-  color: var(--text);
-}
-
-.message.assistant p,
-.message.system p {
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.message-content code,
-.message.system .message-content code,
-.dialog-msg-content code {
-  background: var(--hover);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 11px;
-}
-
-.message-content pre,
-.dialog-msg-content pre {
-  background: var(--hover);
-  padding: 8px;
-  border-radius: var(--radius);
-  overflow-x: auto;
-  margin: 6px 0;
-  font-size: 11px;
-}
-
-.message-content pre code,
-.dialog-msg-content pre code {
-  background: none;
-  padding: 0;
-}
-
-.message-content ul,
-.message-content ol,
-.dialog-msg-content ul,
-.dialog-msg-content ol {
-  margin: 4px 0;
-  padding-left: 18px;
-}
-
-.message-content blockquote,
-.dialog-msg-content blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 10px;
-  margin: 6px 0;
-  color: var(--text-secondary);
-}
-
-.message-content h1,
-.message-content h2,
-.message-content h3,
-.dialog-msg-content h1,
-.dialog-msg-content h2,
-.dialog-msg-content h3 {
-  font-size: 13px;
-  font-weight: 600;
-  margin: 8px 0 4px 0;
-}
-
-.message-content a,
-.dialog-msg-content a {
-  color: var(--accent);
-}
-
-.message-content hr,
-.dialog-msg-content hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 8px 0;
-}
-
-.image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.image-item {
-  position: relative;
-  border-radius: var(--radius);
-  overflow: hidden;
-  border: 1px solid var(--border);
-}
-
-.image-item img {
-  width: 100%;
-  display: block;
-  cursor: pointer;
-}
-
-.image-check {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-}
-
-.image-actions {
-  display: flex;
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.optimization-compare {
-  display: flex;
-  gap: 12px;
-  margin: 8px 0;
-}
-
-.compare-side {
-  flex: 1;
-}
-
-.compare-label {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-  font-weight: 500;
-}
-
-.compare-text {
-  font-size: 12px;
-  padding: 8px;
-  background: var(--hover);
-  border-radius: var(--radius);
-  line-height: 1.5;
-}
-
-.compare-text.optimized {
-  background: #F0F0F0;
-  font-weight: 500;
-}
-
-.plan-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  margin-top: 4px;
-}
-
-.plan-card-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 10px 12px;
-  cursor: pointer;
-  background: var(--hover);
-  transition: background 0.15s;
-}
-
-.plan-card-header:hover {
-  background: var(--border);
-}
-
-.plan-card-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.plan-card-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.plan-step-count {
-  font-size: 11px;
-  color: #888;
-}
-
-.plan-chevron {
-  transition: transform 0.2s;
-  color: #888;
-}
-
-.plan-chevron.expanded {
-  transform: rotate(180deg);
-}
-
-.plan-card-body {
-  padding: 8px 12px;
-  border-top: 1px solid var(--border);
-}
-
-.plan-card-step {
-  border-bottom: 1px solid var(--border);
-  padding: 8px 0;
-}
-
-.plan-card-step:last-child {
-  border-bottom: none;
-}
-
-.plan-step-header {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
-}
-
-.step-prompt-preview {
-  line-height: 1.5;
-  color: #555;
-  flex: 1;
-}
-
-.plan-step-detail {
-  display: none;
-  margin-top: 8px;
-  padding-left: 26px;
-}
-
-.plan-card-step:hover .plan-step-detail {
-  display: block;
-}
-
-.step-field {
-  margin-bottom: 6px;
-}
-
-.step-field:last-child {
-  margin-bottom: 0;
-}
-
-.step-field label {
-  font-size: 10px;
-  text-transform: uppercase;
-  color: #999;
-  letter-spacing: 0.5px;
-  display: block;
-  margin-bottom: 2px;
-}
-
-.step-field p {
-  font-size: 12px;
-  line-height: 1.5;
-  padding: 6px 8px;
-  background: var(--hover);
-  border-radius: 4px;
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.step-desc {
-  font-size: 12px;
-  color: #666;
-  margin: 4px 0 0;
-  padding: 4px 8px;
-  background: var(--hover);
-  border-radius: 4px;
-  line-height: 1.5;
-}
-
-.step-num {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--card);
-  font-size: 10px;
-  flex-shrink: 0;
-}
-
-.step-text {
-  line-height: 1.5;
-}
-
-.error-text {
-  color: var(--danger);
-}
-
-.agent-card {
-  border-left: 3px solid var(--accent);
-  background: var(--bg, #fafafa);
-  padding: 12px;
-  margin: 4px 0;
-  border-radius: 0 var(--radius) var(--radius) 0;
-}
-
-.agent-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 8px;
-}
-
-.agent-badge {
-  background: var(--accent);
-  color: #fff;
-  padding: 1px 8px;
-  border-radius: 3px;
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.agent-cost {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.agent-steps-v2 {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: 12px;
-}
-
-.step-card {
-  background: var(--bg, #fafafa);
-  border: 1px solid var(--border, #e5e5e5);
-  border-radius: 6px;
-  overflow: hidden;
-  cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s;
-}
-.step-card:hover {
-  border-color: var(--accent, #000);
-}
-.step-card.expanded {
-  border-color: var(--accent, #000);
-  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
-}
-
-.step-card-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  font-size: 12px;
-}
-
-.step-card-icon {
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--accent, #000);
-  color: #fff;
-  border-radius: 4px;
-  font-size: 10px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.step-card-name {
-  font-weight: 600;
-  color: #333;
-}
-
-.step-card-detail {
-  color: var(--text-secondary, #888);
-  font-size: 11px;
-}
-
-.step-card-result {
-  margin-left: auto;
-  color: var(--text-secondary, #888);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.step-card-body {
-  padding: 0 12px 10px 40px;
-  font-size: 12px;
-  color: var(--text-secondary, #666);
-  line-height: 1.5;
-  border-top: 1px solid var(--border, #e5e5e5);
-}
-
-.step-card-args {
-  margin-bottom: 4px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.step-arg {
-  background: #eee;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-family: monospace;
-}
-
-.step-card-content {
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.agent-card-content {
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-}
-
-.agent-card-images {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
-  margin-bottom: 8px;
-}
-
-.agent-card-thumb {
-  width: 120px;
-  height: 120px;
-  object-fit: cover;
-  border-radius: 4px;
-  border: 1px solid var(--border, #e5e5e5);
-  cursor: pointer;
-}
-
-.attachment-preview {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
-.attachment-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: var(--hover);
-  border-radius: var(--radius);
-  font-size: 11px;
-}
-
-.attachment-thumb {
-  width: 24px;
-  height: 24px;
-  object-fit: cover;
-  border-radius: 2px;
-}
-
-.attachment-doc {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--border);
-  border-radius: 2px;
-}
-
-.doc-icon {
-  font-size: 8px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.attachment-name {
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.refine-strip {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 6px 8px;
-  flex-wrap: wrap;
-  min-height: 32px;
-}
-
-.refine-strip-item {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-}
-
-.refine-strip-thumb {
-  width: 36px;
-  height: 36px;
-  object-fit: cover;
-  border-radius: 3px;
-  border: 1px solid var(--border);
-}
-
-.refine-strip-thumb-wrap {
-  position: relative;
-  width: 36px;
-  height: 36px;
-}
-
-.refine-strip-badge {
-  position: absolute;
-  top: -4px;
-  left: -4px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--accent);
-  color: white;
-  font-size: 9px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.refine-strip-label {
-  font-size: 9px;
-  color: var(--text-secondary);
-  max-width: 48px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: center;
-}
-
-.refine-add-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border: 1px dashed var(--border);
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-
-.refine-add-btn:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-.refine-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 8px;
-  background: #f0f0f0;
-  border-bottom: 1px solid var(--border);
-}
-
-.refine-label {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.attachment-remove {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: var(--danger);
-  color: white;
-  border: none;
-  font-size: 10px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.upload-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-
-.upload-btn:hover {
-  background: var(--hover);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.message-content.generating {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
-  background: var(--hover);
-  border-radius: 12px;
-}
-
-.generating-indicator {
-  display: flex;
-  gap: 4px;
-}
-
-.generating-indicator .dot {
-  width: 6px;
-  height: 6px;
-  background: var(--text-secondary);
-  border-radius: 50%;
-  animation: bounce 1.4s infinite ease-in-out both;
-}
-
-.generating-indicator .dot:nth-child(1) {
-  animation-delay: -0.32s;
-}
-
-.generating-indicator .dot:nth-child(2) {
-  animation-delay: -0.16s;
-}
-
-.generating-indicator .dot:nth-child(3) {
-  animation-delay: 0s;
-}
-
-@keyframes bounce {
-  0%, 80%, 100% {
-    transform: scale(0);
-  }
-  40% {
-    transform: scale(1);
-  }
-}
-
-.generating-text {
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-
-.task-type-badge {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 1px 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
-  background: #000;
-  border-radius: 3px;
-  vertical-align: middle;
-}
-
-.compare-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  z-index: 200;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.lightbox-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.85);
-  z-index: 300;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-}
-
-.lightbox-content {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  cursor: default;
-}
-
-.lightbox-close {
-  position: absolute;
-  top: -40px;
-  right: 0;
-  background: none;
-  border: none;
-  color: #fff;
-  cursor: pointer;
-  padding: 4px;
-  opacity: 0.7;
-  transition: opacity 0.15s;
-}
-
-.lightbox-close:hover {
-  opacity: 1;
-}
-
-.lightbox-img {
-  max-width: 90vw;
-  max-height: 80vh;
-  border-radius: 4px;
-  object-fit: contain;
-}
-
-.lightbox-actions {
-  margin-top: 12px;
-  display: flex;
-  gap: 8px;
-}
-
-.compare-view {
-  background: var(--card);
-  border-radius: 8px;
-  padding: 24px;
-  max-width: 90vw;
-  max-height: 90vh;
-  overflow: auto;
-}
-
-.compare-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-
-.compare-images {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.compare-img {
-  max-width: 300px;
-  max-height: 400px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-}
-
 .input-area {
   border-top: 1px solid var(--border);
   padding: 12px 16px;
@@ -3104,10 +1658,6 @@ watch(selectedSkillIds, (ids) => {
 .drag-overlay-text {
   font-size: 14px;
   color: var(--accent);
-}
-
-.dialog-drag-overlay {
-  background: rgba(255, 255, 255, 0.9);
 }
 
 .input-main {
@@ -3148,784 +1698,6 @@ watch(selectedSkillIds, (ids) => {
   border-color: var(--accent);
 }
 
-.input-controls {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
-}
-
-.input-options {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.option-label {
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.count-btn {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.count-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-.count-btn.custom-toggle {
-  font-size: 12px;
-  padding: 0 6px;
-  opacity: 0.7;
-}
-
-.count-input {
-  width: 52px;
-  height: 26px;
-  padding: 0 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  text-align: center;
-  font-size: 13px;
-  background: var(--card);
-  outline: none;
-  color: var(--text);
-}
-
-.count-input:focus {
-  border-color: var(--accent);
-}
-
-.size-label {
-  margin-left: 8px;
-}
-
-.size-input {
-  width: 60px;
-  padding: 2px 4px;
-  font-size: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  text-align: center;
-}
-
-.size-input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.size-sep {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin: 0 2px;
-}
-
-.no-limit-label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-left: 8px;
-  cursor: pointer;
-}
-
-.no-limit-label input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  cursor: pointer;
-}
-
-.input-actions {
-  display: flex;
-  gap: 6px;
-}
-
-.assistant-sidebar {
-  width: 320px;
-  border-left: 1px solid var(--border);
-  background: var(--card);
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  transition: width 0.2s ease;
-}
-
-.assistant-sidebar.expanded {
-  width: 520px;
-}
-
-.assistant-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  min-height: 40px;
-}
-
-.assistant-header-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-  align-items: center;
-}
-
-.assistant-tabs {
-  display: flex;
-  gap: 2px;
-  flex: 1;
-  min-width: 0;
-}
-
-.tab-btn {
-  padding: 4px 8px;
-  border: none;
-  background: none;
-  font-size: 12px;
-  cursor: pointer;
-  border-radius: var(--radius);
-  color: var(--text-secondary);
-  white-space: nowrap;
-}
-
-.tab-btn.active {
-  background: var(--active);
-  color: var(--text);
-  font-weight: 500;
-}
-
-.assistant-content {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-}
-
-.context-toggle {
-  display: flex;
-  margin-bottom: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  flex-shrink: 0;
-}
-
-.toggle-btn {
-  flex: 1;
-  padding: 6px;
-  border: none;
-  background: var(--card);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.toggle-btn.active {
-  background: var(--accent);
-  color: var(--card);
-}
-
-.dialog-config-bar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  margin-bottom: 0;
-}
-
-.dialog-config-bar .context-toggle {
-  flex: 1;
-}
-
-.dialog-settings-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--card);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all 0.15s;
-  flex-shrink: 0;
-  padding: 0;
-}
-
-.dialog-settings-btn:hover {
-  background: var(--hover);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.dialog-settings-btn.active {
-  background: var(--accent);
-  color: var(--card);
-  border-color: var(--accent);
-}
-
-.dialog-settings-panel {
-  flex-shrink: 0;
-  margin-top: 6px;
-  margin-bottom: 2px;
-}
-
-.tab-dialog {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-.dialog-messages {
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  margin-bottom: 12px;
-  min-height: 100px;
-}
-
-.dialog-msg {
-  padding: 6px 8px;
-  margin-bottom: 4px;
-  border-radius: var(--radius);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.dialog-msg.user {
-  background: var(--hover);
-  text-align: right;
-}
-
-.dialog-msg.assistant {
-  background: var(--active);
-  position: relative;
-}
-
-.dialog-msg-content {
-  word-break: break-word;
-}
-
-.dialog-msg-content p {
-  margin: 0 0 6px 0;
-}
-
-.dialog-msg-content p:last-child {
-  margin-bottom: 0;
-}
-
-.dialog-msg-content code {
-  background: var(--hover);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 11px;
-}
-
-.dialog-msg-content pre {
-  background: var(--hover);
-  padding: 8px;
-  border-radius: var(--radius);
-  overflow-x: auto;
-  margin: 6px 0;
-  font-size: 11px;
-}
-
-.dialog-msg-content pre code {
-  background: none;
-  padding: 0;
-}
-
-.dialog-msg-content ul,
-.dialog-msg-content ol {
-  margin: 4px 0;
-  padding-left: 18px;
-}
-
-.dialog-msg-content blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 10px;
-  margin: 6px 0;
-  color: var(--text-secondary);
-}
-
-.dialog-msg-content h1,
-.dialog-msg-content h2,
-.dialog-msg-content h3 {
-  font-size: 13px;
-  font-weight: 600;
-  margin: 8px 0 4px 0;
-}
-
-.dialog-msg-content a {
-  color: var(--accent);
-  text-decoration: underline;
-}
-
-.dialog-msg-content hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 8px 0;
-}
-
-.dialog-msg-copy {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 20px;
-  height: 20px;
-  padding: 2px;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.dialog-msg:hover .dialog-msg-copy {
-  opacity: 0.6;
-}
-
-.dialog-msg-copy:hover {
-  opacity: 1 !important;
-  background: var(--hover);
-}
-
-.dialog-actions {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 8px;
-  flex-shrink: 0;
-}
-
-.msg-attachments {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 4px;
-}
-
-.msg-attachment-thumb {
-  width: 40px;
-  height: 40px;
-  object-fit: cover;
-  border-radius: 4px;
-}
-
-.dialog-input-area {
-  flex-shrink: 0;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  margin-top: auto;
-  position: relative;
-}
-
-.dialog-input-area.drag-over {
-  outline: 2px dashed var(--accent);
-  outline-offset: -4px;
-}
-
-.dialog-attachment-preview {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-
-.dialog-attachment-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 6px;
-  background: var(--hover);
-  border-radius: var(--radius);
-  font-size: 10px;
-}
-
-.dialog-attachment-thumb {
-  width: 20px;
-  height: 20px;
-  object-fit: cover;
-  border-radius: 2px;
-}
-
-.dialog-attachment-doc {
-  font-size: 10px;
-  color: var(--text-secondary);
-}
-
-.dialog-attachment-remove {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--danger);
-  color: white;
-  border: none;
-  font-size: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.dialog-input-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.dialog-input-row input,
-.dialog-textarea {
-  flex: 1;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 12px;
-  outline: none;
-  font-family: inherit;
-  resize: none;
-  line-height: 1.4;
-}
-
-.dialog-input-row input:focus,
-.dialog-textarea:focus {
-  border-color: var(--accent);
-}
-
-.dialog-upload-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-
-.dialog-upload-btn:hover {
-  background: var(--hover);
-  color: var(--accent);
-  border-color: var(--accent);
-}
-
-.search-toggle-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: transparent;
-  cursor: pointer;
-  color: var(--text-secondary);
-  transition: all 0.15s;
-}
-
-.search-toggle-btn:hover {
-  background: var(--hover);
-  color: var(--accent);
-}
-
-.search-toggle-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-.tool-calls-area {
-  padding: 4px 8px;
-}
-
-.tool-call-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin: 4px 0;
-  overflow: hidden;
-  background: var(--bg, #fafafa);
-}
-
-.tool-call-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 10px;
-  cursor: pointer;
-  font-size: 12px;
-}
-
-.tool-call-badge {
-  background: #e8e8e8;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 11px;
-}
-
-.tool-call-status {
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.tool-call-body {
-  padding: 6px 10px;
-  border-top: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-secondary);
-  max-height: 150px;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.tool-call-loading {
-  color: var(--accent);
-  animation: pulse-text 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse-text {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-
-.section-title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  margin-bottom: 6px;
-}
-
-.direction-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 0;
-  cursor: pointer;
-}
-
-.direction-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.direction-name {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.direction-desc {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.custom-input {
-  margin-top: 6px;
-}
-
-.preview-text, .result-text, .stream-text {
-  font-size: 12px;
-  padding: 8px;
-  background: var(--hover);
-  border-radius: var(--radius);
-  line-height: 1.5;
-  margin-bottom: 8px;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.plan-streaming {
-  margin-bottom: 12px;
-}
-
-.plan-streaming .stream-text {
-  max-height: 200px;
-  overflow-y: auto;
-  border-left: 2px solid var(--accent);
-  padding-left: 8px;
-  animation: pulse-border 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse-border {
-  0%, 100% { border-left-color: var(--accent); }
-  50% { border-left-color: transparent; }
-}
-
-.optimize-result .result-text {
-  border-left: 2px solid var(--accent);
-  padding-left: 8px;
-  transition: border-left-color 0.3s;
-}
-
-.optimize-result .result-text.streaming {
-  animation: pulse-border 1.5s ease-in-out infinite;
-}
-
-.plan-step {
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px;
-  margin-bottom: 8px;
-}
-
-.step-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 6px;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.step-actions {
-  display: flex;
-  gap: 4px;
-}
-
-.btn-icon {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 1px 5px;
-  color: var(--text);
-}
-
-.btn-icon:hover {
-  background: var(--hover);
-}
-
-.btn-icon:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-
-.plan-template-section {
-  margin-bottom: 10px;
-}
-
-.template-select {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  font-size: 13px;
-  background: #fff;
-}
-
-.template-variables {
-  margin-bottom: 10px;
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.plan-strategy {
-  margin-bottom: 12px;
-}
-
-.strategy-options {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.strategy-label {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 4px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-}
-
-.strategy-label:has(input:checked) {
-  background: var(--active);
-  border-color: var(--accent);
-}
-
-.strategy-desc {
-  color: var(--text-secondary);
-  font-size: 10px;
-}
-
-.form-row {
-  display: flex;
-  gap: 12px;
-}
-
-.form-row label {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-}
-
-.plan-summary {
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin: 8px 0;
-}
-
-.skill-item {
-  margin-bottom: 8px;
-}
-
-.skill-label {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  cursor: pointer;
-}
-
-.skill-info {
-  display: flex;
-  flex-direction: column;
-}
-
-.skill-name {
-  font-size: 13px;
-  font-weight: 500;
-}
-
-.skill-desc {
-  font-size: 11px;
-  color: var(--text-secondary);
-}
-
-.empty-hint {
-  font-size: 12px;
-  color: var(--text-secondary);
-  text-align: center;
-  padding: 20px 0;
-}
-
-.hint-text {
-  font-size: 11px;
-  color: var(--text-secondary);
-  margin-top: 12px;
-}
-
 .checkpoint-overlay {
   position: fixed;
   inset: 0;
@@ -3955,174 +1727,5 @@ watch(selectedSkillIds, (ids) => {
   display: flex;
   gap: 8px;
   justify-content: center;
-}
-
-.context-menu {
-  position: fixed;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  z-index: 300;
-  padding: 4px;
-}
-
-.context-menu button {
-  display: block;
-  width: 100%;
-  padding: 6px 12px;
-  border: none;
-  background: none;
-  text-align: left;
-  font-size: 12px;
-  cursor: pointer;
-  border-radius: var(--radius);
-}
-
-.context-menu button:hover {
-  background: var(--hover);
-}
-
-.download-progress-card {
-  position: fixed;
-  bottom: 100px;
-  right: 24px;
-  width: 320px;
-  max-height: 300px;
-  overflow-y: auto;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  z-index: 99;
-  padding: 12px;
-}
-
-.download-progress-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 13px;
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.download-progress-close {
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  background: none;
-  cursor: pointer;
-  border-radius: 4px;
-  color: var(--text-secondary);
-}
-
-.download-progress-close:hover {
-  background: var(--hover);
-}
-
-.download-progress-item {
-  margin-bottom: 10px;
-}
-
-.download-progress-item:last-child {
-  margin-bottom: 0;
-}
-
-.download-progress-filename {
-  display: block;
-  font-size: 12px;
-  color: var(--text);
-  margin-bottom: 2px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.download-progress-status {
-  font-size: 10px;
-  margin-left: 6px;
-}
-
-.download-progress-status.done {
-  color: var(--success);
-}
-
-.download-progress-status.error {
-  color: var(--danger);
-}
-
-.download-progress-bar {
-  width: 100%;
-  height: 4px;
-  background: var(--hover);
-  border-radius: 2px;
-  margin-top: 4px;
-  overflow: hidden;
-}
-
-.download-progress-fill {
-  height: 100%;
-  background: var(--text);
-  border-radius: 2px;
-  transition: width 0.3s ease;
-}
-
-.download-progress-fill.done {
-  background: var(--success);
-}
-
-.download-progress-fill.error {
-  background: var(--danger);
-}
-
-.download-progress-fill.indeterminate {
-  width: 40% !important;
-  animation: downloadIndeterminate 1.4s ease-in-out infinite;
-}
-
-@keyframes downloadIndeterminate {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(350%); }
-}
-
-.download-progress-error {
-  display: block;
-  font-size: 10px;
-  color: var(--danger);
-  margin-top: 2px;
-}
-
-.download-progress-url {
-  display: block;
-  font-size: 9px;
-  color: var(--text-secondary);
-  margin-top: 1px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.download-toast {
-  position: fixed;
-  bottom: 24px;
-  right: 24px;
-  padding: 8px 16px;
-  border-radius: var(--radius);
-  font-size: 13px;
-  z-index: 100;
-}
-
-.download-toast.success {
-  background: #E8F5E9;
-  color: var(--success);
-}
-
-.download-toast.error {
-  background: #FFEBEE;
-  color: var(--danger);
 }
 </style>

@@ -2,6 +2,65 @@
 
 AI Image Generation Manager — a full-stack desktop application for AI-powered image generation with conversation-based UI, LLM planning, and real-time streaming.
 
+## Quick Start
+Pre-built executables are available on the [Release](https://github.com/Laaaaaaaam/LamImager/releases) page. Download, extract, and run the `.exe`.
+
+## Usage Guide
+
+### 1. Configure API
+
+Open the **API Manage** page. Providers are organized in two levels: **Vendor → Model**.
+
+- **Add Vendor**: enter name, base URL, and API key. One key per vendor, shared by all models underneath.
+- **Add Model**: expand a vendor, click "Add Model", enter model ID, type (LLM / Image Gen / Web Search), and pricing.
+
+> Example: vendor `OpenAI` with base URL `https://api.openai.com`, key entered once, hosting `gpt-4o` (LLM) and `dall-e-3` (Image Gen) models.
+
+Finally, go to **Settings** to set default models for prompt optimization, image generation, and task planning.
+
+### 2. Session Generation
+
+Select or create a session on the left, type a prompt in the center input, and press Enter.
+
+- **Reference Images**: drag or paste images for img2img input
+- **Refine Mode**: click "Refine" on a generated image to re-generate based on it
+- **Context Images**: last 4 images auto-populate; right-click to pin/remove
+
+### 3. Agent Mode
+
+Enable the **"Smart"** toggle next to the input field. The system auto-detects your intent:
+
+| Input | Type | Effect |
+|-------|------|--------|
+| "a cat" | Single | Direct generation |
+| "3 cats, different styles" | Parallel | Multiple images at once |
+| "sketch first, then refine" | Iterative | Step-by-step refinement |
+| "a set of 6 emojis" | Radiate | Grid anchor → per-item expansion |
+
+### 4. Sidebar Assistant
+
+Open the **Dialog** tab in the right sidebar to chat freely with the LLM.
+
+- **Web Search**: toggle the search switch to let the assistant query the web before responding
+- **Response Style**: Default / Verbose / Concise
+- **Context Mode** (gear settings): share session history / input only
+- **Memory Mode** (gear settings): persist across windows / clear with session
+
+### 5. Skills & Rules
+
+- **Skills**: create reusable prompt templates in the Skills page. Use `{prompt}` as the user-input placeholder with optional custom parameters.
+- **Rules**: configure global filters (e.g., auto-append negative prompt "blurry, low quality") and default params in the Rules page.
+
+### 6. Plan Templates
+
+Create multi-step generation templates in the Plan Templates page. Supports three strategies: `parallel`, `iterative`, `radiate`.
+
+- Templates can include variables such as `{{subject}}` and `{{style}}`
+- The Plan tab in the chat input area lets you select a template and fill in variable values
+- AI-assisted creation: describe your workflow in natural language and let the LLM build the template
+
+---
+
 ## Features
 
 **Core Workflow**
@@ -89,7 +148,7 @@ LamImager/
 │       ├── database.py          # Async SQLAlchemy setup
 │       ├── models/              # SQLAlchemy models (9 tables)
 │       ├── routers/             # FastAPI routers (11 modules)
-│       ├── services/            # Business logic (15 services)
+│       ├── services/            # Business logic (16 services)
 │       ├── schemas/             # Pydantic request/response models
 │       └── utils/               # crypto, llm_client, image_client
 ├── frontend/

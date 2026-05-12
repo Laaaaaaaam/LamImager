@@ -108,7 +108,9 @@ excludes = [
 a = Analysis(
     ['desktop/main.py'],
     pathex=['backend'],
-    binaries=[],
+    binaries=[
+        ('C:\\Users\\Administrator\\AppData\\Local\\Programs\\Python\\Python314\\python314.dll', '.'),
+    ],
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],

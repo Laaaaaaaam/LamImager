@@ -14,13 +14,15 @@ from app.models.api_provider import ApiProvider, ProviderType
 from app.models.message import Message
 from app.services.billing_service import record_billing, calc_cost
 from app.schemas.session import GenerateRequest, MessageCreate
+from app.schemas.execution import ExecutionPlan, PlanStep
+from app.schemas.planning import PlanningContext
 from app.schemas.prompt import PromptOptimizeRequest
+from app.services.plan_execution_service import PlanExecutionService
 from app.services.session_manager import add_message, add_system_message, message_to_response
 from app.services.skill_engine import apply_skill, get_skill
 from app.services.rule_engine import apply_rules, get_active_rules
 from app.services.prompt_optimizer import optimize_prompt
 from app.services.settings_service import get_setting
-from app.services.agent_service import run_agent_loop, AGENT_SYSTEM_PROMPT, ErrorEvent
 from app.services.task_manager import TaskManager, TaskStatus
 from app.services.api_manager import resolve_provider_vendor
 from app.utils.image_client import ImageClient, ImageGenError, ImageGenNotSupportedError
@@ -31,17 +33,14 @@ from app.services.agent_intent_service import (
     TASK_TYPE_LABELS,
     parse_agent_intent,
     resolve_context_references,
-    execute_multi_independent,
     validate_agent_result,
     _generate_iterative_steps,
     _generate_radiate_params,
-    _extract_items_from_text,
     _extract_style_from_text,
     _extract_context_image_urls,
     has_search_intent,
     hybrid_parse_intent,
 )
-from app.services.plan_executor import execute_parallel, execute_iterative
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +64,19 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
         },
     ))
 
+    skill_plan: ExecutionPlan | None = None
     for skill_id in data.skill_ids:
         skill = await get_skill(db, skill_id)
         if skill:
-            prompt = apply_skill(prompt, skill)
+            result = apply_skill(prompt, skill)
+            if isinstance(result, ExecutionPlan):
+                skill_plan = result
+                break
+            else:
+                prompt = result
+
+    if skill_plan:
+        return await _execute_skill_plan(db, data, skill_plan, prompt, task_manager)
 
     rules = await get_active_rules(db)
     if rules:
@@ -143,74 +151,63 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
             return {"error": "No image provider configured"}
         image_provider_id = provider.id
 
-    task_manager.update_task(session_id, TaskStatus.GENERATING, progress=0, total=data.image_count, message=f"生成中 0/{data.image_count}")
+    llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
 
-    try:
-        all_image_urls, tokens_in, tokens_out = await generate_images_core(
-            db=db,
-            provider_id=image_provider_id,
+    context_ref_urls = []
+    for msg in (data.context_messages or []):
+        for url in (msg.get("image_urls") or []):
+            if url.startswith("http"):
+                context_ref_urls.append(url)
+
+    plan = ExecutionPlan(
+        strategy="single",
+        steps=[PlanStep(
+            index=0,
             prompt=prompt,
+            negative_prompt=data.negative_prompt,
             image_count=data.image_count,
             image_size=data.image_size,
-            reference_images=data.reference_images if data.reference_images else None,
-            reference_labels=data.reference_labels,
-            negative_prompt=data.negative_prompt,
-            session_id=session_id,
-        )
+        )],
+        plan_meta={"context_reference_urls": context_ref_urls[:4]} if context_ref_urls else {},
+        source="generate",
+    )
 
-        actual_count = len(all_image_urls)
-        task_manager.update_task(session_id, TaskStatus.GENERATING, progress=actual_count, total=actual_count, message=f"生成完成 {actual_count}/{actual_count}")
+    context = PlanningContext.from_generate_request(
+        data,
+        image_provider_id=image_provider_id,
+        llm_provider_id=llm_provider_id,
+    )
 
-        provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
-        provider = provider_result.scalar_one_or_none()
-        if not provider:
-            raise ValueError("Image provider not found")
+    svc = PlanExecutionService()
+    trace = await svc.execute(db, plan, context, task_manager)
 
-        actual_call_count = data.image_count if data.reference_images else 1
-        cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=actual_call_count)
+    all_image_urls = [a.url for st in trace.step_traces for a in st.artifacts if a.url]
 
-        await record_billing(
-            db,
-            session_id=session_id,
-            provider_id=provider.id,
-            billing_type=provider.billing_type.value,
-            tokens_in=tokens_in,
-            tokens_out=tokens_out,
-            cost=cost,
-            currency=provider.currency,
-            detail={"type": "image_gen", "prompt": prompt[:200], "image_count": data.image_count, "image_size": data.image_size},
-        )
+    if trace.status == "failed":
+        await add_system_message(db, session_id, f"生成失败: {trace.error}", message_type="error")
+        return {"error": trace.error, "image_urls": []}
 
-        await add_system_message(db, session_id,
-            f"已生成{len(all_image_urls)} 张图片",
-            message_type="image",
-            metadata={
-                "image_urls": all_image_urls,
-                "prompt": prompt,
-                "negative_prompt": data.negative_prompt,
-                "image_size": data.image_size,
-                "cost": cost,
-            },
-        )
-
-        task_manager.update_task(session_id, TaskStatus.IDLE)
-
-        return {
+    await add_system_message(db, session_id,
+        f"已生成{len(all_image_urls)} 张图片",
+        message_type="image",
+        metadata={
             "image_urls": all_image_urls,
-            "cost": cost,
             "prompt": prompt,
-        }
+            "negative_prompt": data.negative_prompt,
+            "image_size": data.image_size,
+            "cost": trace.total_cost,
+            "trace": trace.model_dump(),
+        },
+    )
 
-    except ValueError as e:
-        task_manager.update_task(session_id, TaskStatus.ERROR, message=str(e))
-        await add_system_message(db, session_id, str(e), message_type="error")
-        return {"error": str(e)}
-    except Exception as e:
-        import traceback
-        logger.error(f"handle_generate failed: {type(e).__name__}: {e}\n{traceback.format_exc()}")
-        task_manager.update_task(session_id, TaskStatus.ERROR, message=str(e))
-        await add_system_message(db, session_id, f"生成失败: {type(e).__name__}: {e}", message_type="error")
-        return {"error": str(e)}
+    task_manager.update_task(session_id, TaskStatus.IDLE)
+
+    return {
+        "image_urls": all_image_urls,
+        "cost": trace.total_cost,
+        "prompt": prompt,
+        "trace": trace.model_dump(),
+    }
 
 
 async def _get_default_provider(db: AsyncSession, setting_key: str) -> str | None:
@@ -219,6 +216,156 @@ async def _get_default_provider(db: AsyncSession, setting_key: str) -> str | Non
     if result and isinstance(result, dict):
         return result.get("provider_id")
     return None
+
+
+async def handle_execute_plan(db: AsyncSession, session_id: str, data: "ExecutePlanRequest") -> dict:
+    from app.schemas.session import ExecutePlanRequest
+    task_manager = TaskManager()
+    task_manager.update_task(session_id, TaskStatus.GENERATING, message="规划执行中")
+
+    image_provider_id = await _get_default_provider(db, "default_image_provider_id")
+    if not image_provider_id:
+        provider_result = await db.execute(
+            select(ApiProvider).where(
+                ApiProvider.provider_type == ProviderType.image_gen,
+                ApiProvider.is_active == True,
+            )
+        )
+        provider = provider_result.scalars().first()
+        if not provider:
+            task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
+            return {"error": "No image provider configured"}
+        image_provider_id = provider.id
+
+    llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
+
+    plan_steps: list[PlanStep] = []
+    for i, s in enumerate(data.steps):
+        plan_steps.append(PlanStep(
+            index=i,
+            prompt=s.prompt,
+            negative_prompt=s.negative_prompt,
+            description=s.description,
+            image_count=s.image_count,
+            image_size=s.image_size,
+        ))
+
+    context_ref_urls_wb = []
+    for msg in (data.context_messages or []):
+        for url in (msg.get("image_urls") or []):
+            if url.startswith("http"):
+                context_ref_urls_wb.append(url)
+
+    plan = ExecutionPlan(
+        strategy=data.strategy,
+        steps=plan_steps,
+        plan_meta={"context_reference_urls": context_ref_urls_wb[:4]} if context_ref_urls_wb else {},
+        source="workbench",
+    )
+
+    context = PlanningContext(
+        session_id=session_id,
+        prompt=data.steps[0].prompt if data.steps else "",
+        negative_prompt=data.negative_prompt,
+        image_size=data.image_size,
+        reference_images=data.reference_images,
+        reference_labels=data.reference_labels,
+        context_messages=data.context_messages,
+        image_provider_id=image_provider_id,
+        llm_provider_id=llm_provider_id,
+    )
+
+    svc = PlanExecutionService()
+    trace = await svc.execute(db, plan, context, task_manager)
+
+    all_urls = [a.url for st in trace.step_traces for a in st.artifacts if a.url]
+
+    if trace.status == "failed":
+        task_manager.update_task(session_id, TaskStatus.ERROR, message=trace.error)
+        await add_system_message(db, session_id, f"规划执行失败: {trace.error}", message_type="error")
+        return {"error": trace.error, "image_urls": [], "steps": []}
+
+    await add_system_message(db, session_id,
+        f"规划执行完成: 已生成 {len(all_urls)} 张图片",
+        message_type="image",
+        metadata={
+            "image_urls": all_urls,
+            "plan_strategy": data.strategy,
+            "cost": trace.total_cost,
+            "step_traces": [st.model_dump() for st in trace.step_traces],
+        },
+    )
+
+    task_manager.update_task(session_id, TaskStatus.IDLE)
+
+    return {
+        "image_urls": all_urls,
+        "cost": trace.total_cost,
+        "plan_strategy": data.strategy,
+        "steps": [st.model_dump() for st in trace.step_traces],
+        "trace": trace.model_dump(),
+    }
+
+
+async def _execute_skill_plan(
+    db: AsyncSession,
+    data: GenerateRequest,
+    plan: ExecutionPlan,
+    original_prompt: str,
+    task_manager: TaskManager,
+) -> dict:
+    session_id = data.session_id
+    image_provider_id = await _get_default_provider(db, "default_image_provider_id")
+    if not image_provider_id:
+        provider_result = await db.execute(
+            select(ApiProvider).where(
+                ApiProvider.provider_type == ProviderType.image_gen,
+                ApiProvider.is_active == True,
+            )
+        )
+        provider = provider_result.scalars().first()
+        if not provider:
+            task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
+            return {"error": "No image provider configured"}
+        image_provider_id = provider.id
+
+    llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
+
+    context = PlanningContext.from_generate_request(
+        data,
+        image_provider_id=image_provider_id,
+        llm_provider_id=llm_provider_id,
+    )
+
+    svc = PlanExecutionService()
+    trace = await svc.execute(db, plan, context, task_manager)
+
+    all_urls = [a.url for st in trace.step_traces for a in st.artifacts if a.url]
+
+    if trace.status == "failed":
+        await add_system_message(db, session_id, f"Skill 执行失败: {trace.error}", message_type="error")
+        return {"error": trace.error, "image_urls": [], "steps": []}
+
+    await add_system_message(db, session_id,
+        f"已生成 {len(all_urls)} 张图片 (skill: {plan.plan_meta.get('skill_name', '')})",
+        message_type="image",
+        metadata={
+            "image_urls": all_urls,
+            "prompt": original_prompt,
+            "plan_strategy": plan.strategy,
+            "cost": trace.total_cost,
+        },
+    )
+
+    task_manager.update_task(session_id, TaskStatus.IDLE)
+
+    return {
+        "image_urls": all_urls,
+        "cost": trace.total_cost,
+        "prompt": original_prompt,
+        "plan_strategy": plan.strategy,
+        "trace": trace.model_dump(),
+    }
 
 
 async def generate_images_core(
@@ -233,6 +380,12 @@ async def generate_images_core(
     session_id: str | None = None,
 ) -> tuple[list[str], int, int]:
     """Core image generation: provider lookup + decrypt + generate. No session-side effects."""
+    logger.info(
+        f"generate_images_core: start, provider_id={provider_id}, "
+        f"image_count={image_count}, image_size={image_size}, "
+        f"reference_images={len(reference_images) if reference_images else 0}"
+    )
+
     result = await db.execute(select(ApiProvider).where(ApiProvider.id == provider_id))
     provider = result.scalar_one_or_none()
     if not provider:
@@ -241,11 +394,14 @@ async def generate_images_core(
     base_url, api_key = await resolve_provider_vendor(db, provider)
     client = ImageClient(base_url, api_key, provider.model_id)
 
+    logger.info(f"generate_images_core: provider resolved, model_id={provider.model_id}")
+
     all_image_urls: list[str] = []
     tokens_in = 0
     tokens_out = 0
 
     if reference_images:
+        logger.info(f"generate_images_core: reference images detected, trying Tier 1 (chat_edit)")
         concurrent_val = await get_setting(db, "max_concurrent")
         max_concurrent = concurrent_val.get("value", 5) if concurrent_val else 5
         semaphore = asyncio.Semaphore(max_concurrent)
@@ -261,8 +417,10 @@ async def generate_images_core(
             tokens_out += usage.get("completion_tokens", 0)
             if urls:
                 all_image_urls.extend(urls)
+                logger.info(f"generate_images_core: Tier 1 (chat_edit) success, got {len(urls)} images")
                 remaining = image_count - len(urls)
                 if remaining > 0:
+                    logger.info(f"generate_images_core: generating {remaining} more images via chat_edit")
                     async def _chat_edit_one(idx):
                         async with semaphore:
                             try:
@@ -281,15 +439,18 @@ async def generate_images_core(
             else:
                 raise ImageGenNotSupportedError("Chat API returned no images")
         except ImageGenNotSupportedError:
-            pass
+            logger.info(f"generate_images_core: Tier 1 (chat_edit) not supported, falling through")
         except ImageGenError as e:
             logger.warning(f"Chat edit failed: {e}")
 
         if not all_image_urls:
+            logger.info(f"generate_images_core: trying Tier 2 (native edit)")
             try:
                 response = await client.edit(prompt=prompt, images=reference_images, n=1, size=image_size)
                 urls = ImageClient.extract_images(response)
                 all_image_urls.extend(urls)
+                if urls:
+                    logger.info(f"generate_images_core: Tier 2 (native edit) success, got {len(urls)} images")
                 remaining = image_count - len(urls)
                 if remaining > 0:
                     async def _edit_one(idx):
@@ -309,6 +470,7 @@ async def generate_images_core(
                 logger.warning(f"Image edit not supported or failed: {e}")
 
         if not all_image_urls:
+            logger.info(f"generate_images_core: trying Tier 3 (vision fallback + generate)")
             prompt = await _apply_vision_fallback_core(db, prompt, reference_images, session_id=session_id)
             async def _generate_one(idx):
                 async with semaphore:
@@ -323,14 +485,19 @@ async def generate_images_core(
             results_list = await asyncio.gather(*tasks)
             for u_list in results_list:
                 all_image_urls.extend(u_list)
+            if all_image_urls:
+                logger.info(f"generate_images_core: Tier 3 (vision fallback) success, got {len(all_image_urls)} images")
     else:
+        logger.info(f"generate_images_core: no reference images, using pure text generation")
         try:
             r = await client.generate(prompt=prompt, negative_prompt=negative_prompt, n=image_count, size=image_size)
             urls = ImageClient.extract_images(r)
             all_image_urls.extend(urls)
+            logger.info(f"generate_images_core: pure text generation success, got {len(urls)} images")
         except Exception as e:
             logger.error(f"Pure text generation failed: {e}")
 
+    logger.info(f"generate_images_core: completed, total_images={len(all_image_urls)}, tokens_in={tokens_in}, tokens_out={tokens_out}")
     return all_image_urls, tokens_in, tokens_out
 
 
@@ -434,6 +601,8 @@ async def _execute_radiate(
     reference_images: list[str] | None = None,
     reference_labels: list[dict] | None = None,
 ) -> dict | None:
+    logger.info(f"_execute_radiate: start, session_id={session_id}")
+
     items = plan_meta.get("items") or []
     if isinstance(items, dict):
         logger.warning("_execute_radiate: items is dict instead of list, discarding")
@@ -442,6 +611,8 @@ async def _execute_radiate(
     if n_items == 0:
         logger.warning("_execute_radiate: no items in plan_meta, skipping radiate expansion")
         return None
+
+    logger.info(f"_execute_radiate: {n_items} items to generate, style={plan_meta.get('style', '')[:30]}")
 
     image_provider_id = await _get_default_provider(db, "default_image_provider_id")
     if not image_provider_id:
@@ -456,12 +627,14 @@ async def _execute_radiate(
             image_provider_id = provider.id
 
     if not image_provider_id:
+        logger.error(f"_execute_radiate: no image provider configured")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
         return {"error": "No image provider"}
 
     provider_result = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
     provider = provider_result.scalar_one_or_none()
     if not provider:
+        logger.error(f"_execute_radiate: image provider not found")
         return {"error": "Image provider not found"}
 
     try:
@@ -492,15 +665,20 @@ async def _execute_radiate(
     task_manager.update_task(session_id, TaskStatus.GENERATING, message=f"生成风格锚点图 ({cols}x{rows}, 4096x4096)")
     anchor_prompt = f"A {cols}x{rows} grid showing {item_descs}. {style_desc} style, matching visual theme. Each cell distinctly separated with clear boundaries. Consistent art style across all cells."
 
+    logger.info(f"_execute_radiate: generating anchor grid, grid={cols}x{rows}, prompt={anchor_prompt[:80]}...")
+
     try:
         anchor_sizes = ["4096x4096", "2048x2048", "1024x1024"]
         anchor_urls = []
         for sz in anchor_sizes:
+            logger.debug(f"_execute_radiate: trying anchor size {sz}")
             response = await client.generate(prompt=anchor_prompt, n=1, size=sz)
             anchor_urls = ImageClient.extract_images(response)
             if anchor_urls:
+                logger.info(f"_execute_radiate: anchor grid generated with size {sz}")
                 break
         if not anchor_urls:
+            logger.error(f"_execute_radiate: failed to generate anchor grid")
             return {"error": "Failed to generate anchor grid"}
 
         anchor_url = anchor_urls[0]
@@ -517,7 +695,34 @@ async def _execute_radiate(
             detail={"type": "image_gen", "agent": True, "radiate": "anchor_grid"})
         cost_total += anchor_cost
 
-        task_manager.set_checkpoint_state(session_id, {"step": "anchor_grid", "image_url": anchor_url, "cols": cols, "rows": rows})
+        logger.info(f"_execute_radiate: anchor grid ready, expanding ({n_items} items)")
+
+        # CHECKPOINT: 锚点图审批（暂时禁用，前端 UI 就绪后取消注释）
+        # from app.core.events import LamEvent
+        # checkpoint_lam = LamEvent(
+        #     event_type="checkpoint_required",
+        #     correlation_id=f"radiate-{session_id}",
+        #     payload={
+        #         "type": "agent_checkpoint",
+        #         "session_id": session_id,
+        #         "tool_name": "radiate_anchor",
+        #         "message": f"锚点网格已生成 ({cols}x{rows})，请确认风格后继续展开 {n_items} 个子项",
+        #         "preview": anchor_url,
+        #         "cols": cols,
+        #         "rows": rows,
+        #     },
+        # )
+        # await task_manager.publish(checkpoint_lam)
+        # checkpoint_evt = task_manager.set_checkpoint_event(session_id, checkpoint_lam)
+        # await checkpoint_evt.wait()
+        # cp_state = task_manager.get_checkpoint_state(session_id)
+        # task_manager.clear_checkpoint_state(session_id)
+        # if cp_state and not cp_state.get("approved", False):
+        #     logger.info(f"_execute_radiate: checkpoint rejected, cancelling")
+        #     task_manager.update_task(session_id, TaskStatus.IDLE)
+        #     return {"error": "锚点图审批未通过，已取消", "images": accumulated_images, "steps": steps}
+        # logger.info(f"_execute_radiate: checkpoint approved, cropping grid")
+        # END CHECKPOINT
 
         grid_images = await _crop_grid(anchor_url, cols, rows)
         if not grid_images or len(grid_images) < n_items:
@@ -662,7 +867,12 @@ async def _build_agent_context(db: AsyncSession, session_id: str, max_tokens: in
                 pass
 
         if image_urls:
-            parts: list[dict] = [{"type": "text", "text": f"{content}\n\n[上下文包含 {len(image_urls)} 张已生成的图片]"}]
+            parts: list[dict] = [{"type": "text", "text": content}]
+            for img_url in image_urls:
+                parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": img_url, "detail": "auto"},
+                })
             context.insert(0, {"role": role, "content": parts})
             image_count += len(image_urls)
         else:
@@ -852,6 +1062,8 @@ async def _enhance_with_search(
     prompt: str,
     task_manager: TaskManager,
 ) -> str:
+    logger.info(f"_enhance_with_search: start, session_id={session_id}, prompt={prompt[:60]}...")
+
     from app.tools.web_search import WebSearchTool
     from app.tools.image_search import ImageSearchTool
 
@@ -875,42 +1087,59 @@ async def _enhance_with_search(
     retry_count_val = await get_setting(db, "search_retry_count")
     retry_count = retry_count_val.get("value", 3) if retry_count_val else 3
 
+    logger.info(f"_enhance_with_search: search provider found, retry_count={retry_count}")
+
     task_manager.update_task(session_id, TaskStatus.GENERATING,
         message="搜索参考资料中...")
 
     search_context_parts = []
 
+    logger.info(f"_enhance_with_search: executing web search")
     web_tool = WebSearchTool()
     web_result = await web_tool.execute(query=prompt, max_results=5, api_key=api_key, retry_count=retry_count)
     if web_result.content and not web_result.meta.get("error"):
         search_context_parts.append(f"[网页搜索结果]\n{web_result.content}")
+        logger.info(f"_enhance_with_search: web search success, result length={len(web_result.content)}")
         await add_system_message(db, session_id,
             f"搜索参考: 找到相关网页资料",
             message_type="image",
             metadata={"search_type": "web", "sources": web_result.meta.get("sources", [])})
+    else:
+        logger.info(f"_enhance_with_search: web search failed or empty")
 
+    logger.info(f"_enhance_with_search: executing image search")
     image_tool = ImageSearchTool()
     img_result = await image_tool.execute(query=prompt, max_results=5, api_key=api_key, retry_count=retry_count)
     if img_result.content and not img_result.meta.get("error"):
         search_context_parts.append(f"[图片搜索结果]\n{img_result.content}")
         image_urls = [s.get("image_url", "") for s in img_result.meta.get("sources", []) if s.get("image_url")]
         if image_urls:
+            logger.info(f"_enhance_with_search: image search success, found {len(image_urls)} images")
             await add_system_message(db, session_id,
                 f"搜索参考: 找到 {len(image_urls)} 张参考图",
                 message_type="image",
                 metadata={"search_type": "image", "image_urls": image_urls[:4]})
+        else:
+            logger.info(f"_enhance_with_search: image search success but no image URLs")
+    else:
+        logger.info(f"_enhance_with_search: image search failed or empty")
 
-    return "\n\n".join(search_context_parts)
+    result = "\n\n".join(search_context_parts)
+    logger.info(f"_enhance_with_search: completed, context length={len(result)}")
+    return result
 
 
 async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict:
     session_id = data.session_id
     prompt = data.prompt
 
+    logger.info(f"=== handle_agent_generate START === session_id={session_id}, prompt={prompt[:100]}...")
+
     task_manager = TaskManager()
     correlation_id = f"agent-{session_id}"
 
     if not prompt or not prompt.strip():
+        logger.warning(f"handle_agent_generate: empty prompt, session_id={session_id}")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="提示词不能为空")
         await add_system_message(db, session_id, "提示词不能为空，请输入具体的图像生成需求", message_type="error")
         return {
@@ -939,9 +1168,12 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
             llm_provider_id = llm_provider.id
 
     if not llm_provider_id:
+        logger.error(f"handle_agent_generate: no LLM provider configured, session_id={session_id}")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置LLM")
         await add_system_message(db, session_id, "未配置LLM，请先在API管理中添加", message_type="error")
         return {"error": "No LLM provider configured"}
+
+    logger.info(f"handle_agent_generate: llm_provider_id={llm_provider_id}")
 
     image_provider_id = await _get_default_provider(db, "default_image_provider_id")
     if not image_provider_id:
@@ -955,7 +1187,8 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         if image_provider:
             image_provider_id = image_provider.id
 
-    # === Resolve LLM provider for hybrid intent parsing ===
+    logger.info(f"handle_agent_generate: image_provider_id={image_provider_id}")
+
     llm_api_key = ""
     llm_base_url = ""
     llm_model_id = ""
@@ -965,11 +1198,13 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         try:
             llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
             llm_model_id = llm_prov.model_id
+            logger.info(f"handle_agent_generate: LLM provider resolved, model_id={llm_model_id}")
         except Exception as e:
             logger.warning(f"LLM key decrypt failed for intent classifier, falling back to regex: {e}")
 
-    # === Agent Intent Parsing (regex → LLM hybrid) ===
     context_images = _extract_context_image_urls(data.context_messages) or None
+    logger.info(f"handle_agent_generate: context_images count={len(context_images) if context_images else 0}")
+
     intent = await hybrid_parse_intent(
         prompt=prompt,
         image_count=data.image_count,
@@ -980,6 +1215,14 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         context_messages=data.context_messages,
         reference_labels=data.reference_labels,
     )
+
+    logger.info(
+        f"handle_agent_generate: intent parsed, task_type={intent.task_type}, "
+        f"strategy={intent.strategy}, expected_count={intent.expected_count}, "
+        f"confidence={intent.confidence:.2f}, items={len(intent.items)}, "
+        f"decision_source={intent.decision_trace.get('source', 'unknown')}"
+    )
+
     intent.references = await resolve_context_references(
         db=db,
         session_id=session_id,
@@ -993,18 +1236,27 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         if not item.reference_urls:
             item.reference_urls = intent.references
 
-    # Strategy is determined by code, not by frontend or LLM
+    logger.info(
+        f"handle_agent_generate: references resolved, "
+        f"reference_images={len(intent.reference_images)}, "
+        f"reference_labels={len(intent.reference_labels)}, "
+        f"context_refs={len(intent.references)}"
+    )
+
     strategy = STRATEGY_MAP.get(intent.task_type, "single")
     type_label = TASK_TYPE_LABELS.get(intent.task_type, "未知")
 
-    # === Search Enhancement ===
     search_context = ""
     if has_search_intent(prompt):
+        logger.info(f"handle_agent_generate: search intent detected, triggering search enhancement")
         search_context = await _enhance_with_search(db, session_id, prompt, task_manager)
         if search_context:
             enhanced_prompt = f"{prompt}\n\n[搜索参考信息]\n{search_context}"
             data.prompt = enhanced_prompt
             prompt = enhanced_prompt
+            logger.info(f"handle_agent_generate: search enhancement completed, context length={len(search_context)}")
+
+    logger.info(f"handle_agent_generate: routing to strategy={strategy}, task_type={intent.task_type}")
 
     from app.core.events import LamEvent
     await task_manager.publish(LamEvent(
@@ -1021,112 +1273,50 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         message=f"{type_label} | 策略: {strategy}",
         task_type=intent.task_type, strategy=strategy)
 
-    # === Fixed Strategy Routing ===
-    result: dict | None = None
+    plan = await _build_execution_plan(
+        db=db,
+        session_id=session_id,
+        strategy=strategy,
+        intent=intent,
+        prompt=prompt,
+        data=data,
+        task_manager=task_manager,
+        llm_provider_id=llm_provider_id,
+        context_images=context_images,
+    )
 
-    if strategy == "single":
-        result = await _execute_single(
-            db, session_id, data, intent, task_manager,
-            image_provider_id, llm_provider_id,
-        )
+    if plan is None:
+        from dataclasses import asdict as _asdict
+        intent_data = _asdict(intent)
+        result = {"error": "无法构建执行计划", "images": [], "steps": [], "intent": intent_data}
+        task_manager.update_task(session_id, TaskStatus.ERROR, message="无法构建执行计划")
+        await add_system_message(db, session_id, "无法构建执行计划", message_type="error")
+        await task_manager.publish(LamEvent(
+            event_type="task_failed",
+            correlation_id=correlation_id,
+            payload={"type": "agent_error", "session_id": session_id, "error": "无法构建执行计划"},
+        ))
+        logger.info(f"=== handle_agent_generate END (plan build failed) === session_id={session_id}")
+        return result
 
-    elif strategy == "parallel":
-        result = await execute_multi_independent(
-            db=db,
-            session_id=session_id,
-            intent=intent,
-            data=data,
-            task_manager=task_manager,
-            llm_provider_id=llm_provider_id,
-            image_provider_id=image_provider_id,
-        )
+    context = PlanningContext.from_generate_request(
+        data,
+        image_provider_id=image_provider_id,
+        llm_provider_id=llm_provider_id,
+        search_context=search_context,
+        context_images=context_images,
+    )
+    context.reference_images = intent.reference_images or []
+    context.reference_labels = intent.reference_labels or []
 
-    elif strategy == "iterative":
-        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
-        llm_prov = llm_result.scalar_one_or_none()
-        if not llm_prov:
-            result = {"error": "LLM provider not found", "images": [], "steps": []}
-        else:
-            try:
-                llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
-            except Exception as e:
-                result = {"error": f"LLM API key decryption failed: {e}", "images": [], "steps": []}
-                llm_api_key = ""
-                llm_base_url = ""
+    svc = PlanExecutionService()
+    trace = await svc.execute(db, plan, context, task_manager)
 
-            if not result:
-                task_manager.update_task(session_id, TaskStatus.GENERATING,
-                    message=f"迭代精修 | LLM 生成步骤")
-                steps = await _generate_iterative_steps(
-                    prompt=prompt,
-                    llm_api_key=llm_api_key,
-                    llm_base_url=llm_base_url,
-                    llm_model_id=llm_prov.model_id,
-                    context_images=context_images,
-                )
-                if not steps:
-                    result = {"error": "无法生成迭代步骤，请描述更具体（如：先出草图，再精修细节）", "images": [], "steps": []}
-                else:
-                    result = await execute_iterative(
-                        db=db,
-                        session_id=session_id,
-                        steps=steps,
-                        provider_id=image_provider_id,
-                        task_manager=task_manager,
-                        accumulated_images=[],
-                        llm_provider_id=llm_provider_id,
-                        reference_images=intent.reference_images or None,
-                        reference_labels=intent.reference_labels or None,
-                    )
+    all_urls = [a.url for st in trace.step_traces for a in st.artifacts if a.url]
 
-    elif strategy == "radiate":
-        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
-        llm_prov = llm_result.scalar_one_or_none()
-        if not llm_prov:
-            result = {"error": "LLM provider not found", "images": [], "steps": []}
-        else:
-            try:
-                llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
-            except Exception as e:
-                result = {"error": f"LLM API key decryption failed: {e}", "images": [], "steps": []}
-                llm_api_key = ""
-                llm_base_url = ""
-
-            if not result:
-                task_manager.update_task(session_id, TaskStatus.GENERATING,
-                    message=f"套图辐射 | LLM 生成子项")
-                radiate_params = await _generate_radiate_params(
-                    prompt=prompt,
-                    expected_count=intent.expected_count,
-                    llm_api_key=llm_api_key,
-                    llm_base_url=llm_base_url,
-                    llm_model_id=llm_prov.model_id,
-                    context_images=context_images,
-                )
-                items = radiate_params.get("items", [])
-                if not items:
-                    result = {"error": "无法从需求中提取套图子项，请描述更具体（如：做一套6个表情包，包含开心、生气、惊讶...）", "images": [], "steps": []}
-                else:
-                    plan_meta = {
-                        "items": items,
-                        "style": radiate_params.get("style", ""),
-                        "overall_theme": radiate_params.get("overall_theme", ""),
-                    }
-                    result = await _execute_radiate(
-                        db, session_id, plan_meta, data,
-                        task_manager, [], [], [],
-                        llm_provider_id, 0, 0, 0.0,
-                        reference_images=intent.reference_images or None,
-                        reference_labels=intent.reference_labels or None,
-                    )
-
-    # === Handle result ===
-    if result is None:
-        result = {"error": "未知策略，执行失败", "images": [], "steps": []}
-
-    # Handle error results
-    if result.get("error"):
-        error_msg = result["error"]
+    if trace.status == "failed":
+        error_msg = trace.error
+        logger.error(f"handle_agent_generate: execution failed, error={error_msg}")
         task_manager.update_task(session_id, TaskStatus.ERROR, message=error_msg)
         await add_system_message(db, session_id, f"执行失败: {error_msg}", message_type="error")
         from dataclasses import asdict as _asdict
@@ -1135,15 +1325,15 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
             f"执行失败: {error_msg}",
             message_type="agent",
             metadata={
-                "steps": result.get("steps", []),
+                "steps": [],
                 "final_output": f"执行失败: {error_msg}",
-                "images": result.get("images", []),
-                "final_images": result.get("final_images", []),
+                "images": all_urls,
+                "final_images": [],
                 "intermediate_images": [],
                 "intent": intent_data,
-                "tokens_in": result.get("tokens_in", 0),
-                "tokens_out": result.get("tokens_out", 0),
-                "cost": result.get("cost", 0),
+                "tokens_in": trace.total_tokens_in,
+                "tokens_out": trace.total_tokens_out,
+                "cost": trace.total_cost,
                 "cancelled": False,
                 "task_type": intent.task_type,
                 "strategy": strategy,
@@ -1154,38 +1344,40 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
             correlation_id=correlation_id,
             payload={"type": "agent_error", "session_id": session_id, "error": error_msg},
         ))
-        result["intent"] = intent_data
+        result = {"error": error_msg, "images": all_urls, "steps": [], "intent": intent_data}
+        logger.info(f"=== handle_agent_generate END (error) === session_id={session_id}")
         return result
 
-    # Validate result against intent
-    accumulated_images = result.get("images", [])
-    if not validate_agent_result(intent, {"images": accumulated_images, "final_images": result.get("final_images", [])}):
+    logger.info(
+        f"handle_agent_generate: execution completed, "
+        f"images={len(all_urls)}, "
+        f"tokens_in={trace.total_tokens_in}, "
+        f"tokens_out={trace.total_tokens_out}, "
+        f"cost={trace.total_cost:.4f}"
+    )
+
+    if not validate_agent_result(intent, {"images": all_urls, "final_images": all_urls}):
         logger.warning(
-            f"Agent produced {len(accumulated_images)} images, expected {intent.expected_count}"
+            f"Agent produced {len(all_urls)} images, expected {intent.expected_count}"
         )
-        existing_output = result.get("output", "")
-        if existing_output.strip():
-            result["output"] = existing_output + f"\n\n(注意: 请求 {intent.expected_count} 张，实际生成 {len(accumulated_images)} 张)"
-        else:
-            result["output"] = f"(注意: 请求 {intent.expected_count} 张，实际生成 {len(accumulated_images)} 张)"
 
     from dataclasses import asdict as _asdict
     intent_data = _asdict(intent)
-    final_output = result.get("output", "Agent 执行完成")
+    final_output = f"已生成 {len(all_urls)} 张图片"
     await add_system_message(db, session_id,
         final_output,
         message_type="agent",
         metadata={
-            "steps": result.get("steps", []),
+            "steps": [st.model_dump() for st in trace.step_traces],
             "final_output": final_output,
-            "images": accumulated_images,
-            "final_images": result.get("final_images", []),
-            "intermediate_images": result.get("intermediate_images", []),
+            "images": all_urls,
+            "final_images": all_urls,
+            "intermediate_images": [],
             "intent": intent_data,
-            "tokens_in": result.get("tokens_in", 0),
-            "tokens_out": result.get("tokens_out", 0),
-            "cost": result.get("cost", 0),
-            "cancelled": result.get("cancelled", False),
+            "tokens_in": trace.total_tokens_in,
+            "tokens_out": trace.total_tokens_out,
+            "cost": trace.total_cost,
+            "cancelled": False,
             "task_type": intent.task_type,
             "strategy": strategy,
         },
@@ -1200,12 +1392,188 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
             "session_id": session_id,
             "task_type": intent.task_type,
             "strategy": strategy,
-            "image_count": len(accumulated_images),
+            "image_count": len(all_urls),
         },
     ))
 
-    result["intent"] = intent_data
+    result = {
+        "output": final_output,
+        "steps": [st.model_dump() for st in trace.step_traces],
+        "cost": trace.total_cost,
+        "tokens_in": trace.total_tokens_in,
+        "tokens_out": trace.total_tokens_out,
+        "cancelled": False,
+        "images": all_urls,
+        "final_images": all_urls,
+        "intermediate_images": [],
+        "intent": intent_data,
+    }
+    logger.info(f"=== handle_agent_generate END (success) === session_id={session_id}")
     return result
+
+
+async def _build_execution_plan(
+    db: AsyncSession,
+    session_id: str,
+    strategy: str,
+    intent: AgentIntent,
+    prompt: str,
+    data: GenerateRequest,
+    task_manager: TaskManager,
+    llm_provider_id: str,
+    context_images: list[str] | None,
+) -> ExecutionPlan | None:
+    from dataclasses import asdict as _asdict
+    intent_meta = _asdict(intent)
+
+    if strategy == "single":
+        return ExecutionPlan(
+            strategy="single",
+            steps=[PlanStep(
+                index=0,
+                prompt=prompt,
+                negative_prompt=data.negative_prompt,
+                image_count=intent.expected_count,
+                image_size=data.image_size,
+            )],
+            intent_meta=intent_meta,
+            plan_meta={"context_reference_urls": intent.references or []},
+            source="agent_intent",
+        )
+
+    elif strategy == "parallel":
+        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
+        llm_prov = llm_result.scalar_one_or_none()
+        if not llm_prov:
+            logger.error("_build_execution_plan: LLM provider not found for parallel")
+            return None
+
+        try:
+            llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
+        except Exception as e:
+            logger.error(f"_build_execution_plan: LLM key decrypt failed: {e}")
+            return None
+
+        task_manager.update_task(session_id, TaskStatus.GENERATING,
+            message=f"多图并行 | 生成 {len(intent.items)} 个子项的提示词")
+
+        prompts = await _generate_item_prompts(
+            items=intent.items,
+            intent=intent,
+            llm_provider_id=llm_provider_id,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            model_id=llm_prov.model_id,
+            context_images=context_images,
+        )
+
+        steps: list[PlanStep] = []
+        for i, (item, item_prompt) in enumerate(zip(intent.items, prompts)):
+            steps.append(PlanStep(
+                index=i,
+                prompt=item_prompt,
+                description=item.label,
+                image_count=1,
+                image_size=data.image_size,
+            ))
+
+        return ExecutionPlan(
+            strategy="parallel",
+            steps=steps,
+            intent_meta=intent_meta,
+            plan_meta={"context_reference_urls": intent.references or []},
+            source="agent_intent",
+        )
+
+    elif strategy == "iterative":
+        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
+        llm_prov = llm_result.scalar_one_or_none()
+        if not llm_prov:
+            logger.error("_build_execution_plan: LLM provider not found for iterative")
+            return None
+
+        try:
+            llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
+        except Exception as e:
+            logger.error(f"_build_execution_plan: LLM key decrypt failed: {e}")
+            return None
+
+        task_manager.update_task(session_id, TaskStatus.GENERATING,
+            message=f"迭代精修 | LLM 生成步骤")
+
+        iter_steps = await _generate_iterative_steps(
+            prompt=prompt,
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model_id=llm_prov.model_id,
+            context_images=context_images,
+        )
+        if not iter_steps:
+            logger.warning("_build_execution_plan: _generate_iterative_steps returned empty")
+            return None
+
+        plan_steps: list[PlanStep] = []
+        for i, s in enumerate(iter_steps):
+            plan_steps.append(PlanStep(
+                index=i,
+                prompt=s.get("prompt", ""),
+                negative_prompt=s.get("negative_prompt", ""),
+                description=s.get("description", ""),
+                image_count=s.get("image_count", 1),
+                image_size=s.get("image_size", ""),
+            ))
+
+        return ExecutionPlan(
+            strategy="iterative",
+            steps=plan_steps,
+            intent_meta=intent_meta,
+            plan_meta={"context_reference_urls": intent.references or []},
+            source="agent_intent",
+        )
+
+    elif strategy == "radiate":
+        llm_result = await db.execute(select(ApiProvider).where(ApiProvider.id == llm_provider_id))
+        llm_prov = llm_result.scalar_one_or_none()
+        if not llm_prov:
+            logger.error("_build_execution_plan: LLM provider not found for radiate")
+            return None
+
+        try:
+            llm_base_url, llm_api_key = await resolve_provider_vendor(db, llm_prov)
+        except Exception as e:
+            logger.error(f"_build_execution_plan: LLM key decrypt failed: {e}")
+            return None
+
+        task_manager.update_task(session_id, TaskStatus.GENERATING,
+            message=f"套图辐射 | LLM 生成子项")
+
+        radiate_params = await _generate_radiate_params(
+            prompt=prompt,
+            expected_count=intent.expected_count,
+            llm_api_key=llm_api_key,
+            llm_base_url=llm_base_url,
+            llm_model_id=llm_prov.model_id,
+            context_images=context_images,
+        )
+        items = radiate_params.get("items", [])
+        if not items:
+            logger.warning("_build_execution_plan: _generate_radiate_params returned empty items")
+            return None
+
+        return ExecutionPlan(
+            strategy="radiate",
+            steps=[],
+            intent_meta=intent_meta,
+            plan_meta={
+                "items": items,
+                "style": radiate_params.get("style", ""),
+                "overall_theme": radiate_params.get("overall_theme", ""),
+                "context_reference_urls": intent.references or [],
+            },
+            source="agent_intent",
+        )
+
+    return None
 
 
 async def _execute_single(
@@ -1217,7 +1585,10 @@ async def _execute_single(
     image_provider_id: str,
     llm_provider_id: str,
 ) -> dict:
+    logger.info(f"_execute_single: start, session_id={session_id}, expected_count={intent.expected_count}")
+
     if not image_provider_id:
+        logger.error(f"_execute_single: no image provider configured")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
         return {"error": "未配置图像生成API，请先在API管理中添加", "images": [], "steps": []}
 
@@ -1234,6 +1605,12 @@ async def _execute_single(
         all_refs.extend(url_b64)
     reference_images = all_refs[:4] if all_refs else None
 
+    logger.info(
+        f"_execute_single: calling generate_images_core, "
+        f"image_count={image_count}, image_size={image_size}, "
+        f"reference_images={len(reference_images) if reference_images else 0}"
+    )
+
     try:
         urls, tokens_in, tokens_out = await generate_images_core(
             db=db,
@@ -1247,8 +1624,10 @@ async def _execute_single(
             session_id=session_id,
         )
 
+        logger.info(f"_execute_single: generate_images_core returned {len(urls)} images, tokens_in={tokens_in}, tokens_out={tokens_out}")
+
         if urls:
-            pass  # images stored in agent message metadata.images, not as separate message
+            pass
 
         if image_provider_id and urls:
             img_provider = await db.execute(select(ApiProvider).where(ApiProvider.id == image_provider_id))
@@ -1259,8 +1638,10 @@ async def _execute_single(
                     billing_type=img_prov.billing_type.value, tokens_in=tokens_in, tokens_out=tokens_out,
                     cost=img_cost, currency=img_prov.currency,
                     detail={"type": "image_gen", "agent": True, "image_count": len(urls)})
+                logger.info(f"_execute_single: billing recorded, cost={img_cost:.4f}")
 
         output = f"已生成 {len(urls)} 张图片" if urls else "图像生成API返回空结果，请检查API配置或更换提示词"
+        logger.info(f"_execute_single: completed, output={output[:50]}")
         return {
             "output": output,
             "steps": [{"type": "tool_result", "name": "generate_image", "content": prompt[:200], "args": {"prompt": prompt, "count": image_count}, "meta": {"image_urls": urls}}],

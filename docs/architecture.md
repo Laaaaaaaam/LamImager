@@ -19,7 +19,7 @@ LamImager is a monolithic web application for managing AI image generation tasks
 │                    FastAPI Backend                          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
 │  │   Routers   │→ │  Services   │→ │   Models    │        │
-│  │ (11 modules)│  │ (15 services)│  │ (9 tables) │        │
+│  │ (11 modules)│  │ (16 services)│  │ (10 tables)│        │
 │  └─────────────┘  └─────────────┘  └──────┬──────┘        │
 │                                           │                │
 │  ┌────────────────────────────────────────┼──────────────┐ │
@@ -58,14 +58,15 @@ LamImager is a monolithic web application for managing AI image generation tasks
 | API Clients | Axios HTTP clients | `src/api/*.ts` (12 modules incl. sse.ts) |
 | Stores | Pinia state management | `src/stores/*.ts` |
 | Composables | Reusable composition functions | `src/composables/*.ts` (useSessionEvents, useDialog, useMarkdown, useDownload) |
-| Components | Shared UI components | `src/components/` (AgentStreamCard, CheckpointOverlay, ErrorBoundary, ConfirmDialog) |
+| Components | Shared UI components | `src/components/` (ConfirmDialog, ErrorBoundary) + `src/components/session/` (15: Lightbox, CompareOverlay, ContextMenu, GeneratingIndicator, ContextImageStrip, ComposerControls, TextMessageCard, OptimizationCard, ImageMessageCard, PlanMessageCard, AgentMessageCard, AssistantSidebar, MessageList, AgentStreamCard, CheckpointOverlay) |
 | Types | TypeScript interfaces | `src/types/index.ts` |
 
 ## Data Models
 
 | Model | Purpose |
 |-------|---------|
-| `api_providers` | API configurations (LLM + Image Gen + Web Search), encrypted keys |
+| `api_vendors` | API vendors (name, base_url, encrypted API key); one key per vendor |
+| `api_providers` | Models under a vendor (linked via `vendor_id`); stores model_id, type, billing, price |
 | `skills` | Reusable prompt templates |
 | `rules` | Global configuration rules (default_params/filter/workflow) |
 | `billing_records` | Cost tracking per API call (linked to sessions) |
@@ -73,7 +74,7 @@ LamImager is a monolithic web application for managing AI image generation tasks
 | `sessions` | Conversation sessions for the chat-based UI |
 | `messages` | Messages within sessions (user/assistant/system/agent) |
 | `app_settings` | Application settings (default providers, image size, max_concurrent, search_retry_count, download_directory, agent_checkpoint_rules) |
-| `plan_templates` | Plan templates with variables for template-based planning |
+| `plan_templates` | Plan templates with variables for template-based planning, auto-versioning via `builtin_version` |
 
 ## Data Flow
 
@@ -149,8 +150,10 @@ User Message (with optional attachments)
 ### API Key Encryption
 
 - Algorithm: AES-256-GCM
-- Key derivation: SHA-256(MAC address + hostname)
-- Storage: Base64(nonce + ciphertext + tag) in SQLite
+- Key derivation: SHA-256 from a file-based seed (`<DATA_DIR>/.encryption_seed`), auto-created on first run
+- Storage: Base64(nonce + ciphertext + tag) in SQLite (`api_vendors.api_key_enc` for vendor mode, `api_providers.api_key_enc` for legacy)
+- Resolution: `resolve_provider_vendor()` prefers vendor key, falls back to provider's own key
+- Portability: Copy the `.encryption_seed` file alongside the database to preserve keys when moving to a new machine
 - Response masking: Show only last 4 characters
 - Decrypt error handling: Caught and logged, never crashes the request
 
@@ -158,7 +161,7 @@ User Message (with optional attachments)
 
 ```python
 # Encrypt
-key = derive_key()  # From machine fingerprint
+key = derive_key()  # From file-based seed (<DATA_DIR>/.encryption_seed)
 nonce = os.urandom(12)
 ciphertext = AESGCM(key).encrypt(nonce, plaintext, None)
 stored = base64.b64encode(nonce + ciphertext)
@@ -282,23 +285,26 @@ User Input (Agent mode)
 - Falls back gracefully if no `web_search` provider configured
 
 ### Style Anchor Flow
-For multi-item generation (e.g. "3 emoji pack"), handled via two paths:
+For multi-item generation (e.g. "3 emoji pack"), handled via intent-based routing:
 
-1. **Direct routing** (primary): `handle_agent_generate()` detects "套图/表情包/系列/组" keywords with count >= 2 → extracts items via keyword matching or regex count fallback → calls `_execute_radiate()` directly, bypassing the LLM agent loop entirely
-2. **Agent Loop fallback**: LLM calls `plan(action="apply")` on built-in「套图生成」template → `_execute_radiate()` triggered from the plan tool result
+1. **Intent classification**: `parse_agent_intent()` classifies prompts into intent types (multi_item, radiate, iterative, single) via 8 priority-ordered regex rules
+2. **multi_item** (表情包/three-view/enumerated): Bypasses agent loop via `execute_multi_item_intent()` — parallel `generate_image` tool calls
+3. **radiate** (套图/一组/系列): Enters the agent loop; LLM's `plan` tool triggers `_execute_radiate()` — anchor grid → PIL crops → per-item expansion with `chat_edit()`
+4. **iterative**: Enters the agent loop; LLM calls `plan` tool with iterative strategy → `execute_iterative()` sequential execution
+5. **parallel**: Enters the agent loop; LLM calls `plan` tool with parallel strategy → `execute_parallel()` concurrent execution via Semaphore
 
-`_execute_radiate()` flow:
-3. Code generates anchor grid → PIL crops into cells → per-cell image generation with `chat_edit()`
+Plan executors are in `backend/app/services/plan_executor.py`. Backend-only executors ensure consistent execution regardless of LLM reliability.
 
-### SSE Events
-| Event | Data |
-|-------|------|
-| `token` | `{type:"token", content:"..."}` |
-| `tool_call` | `{type:"tool_call", name:"web_search", args:{query:"..."}}` |
-| `tool_result` | `{type:"tool_result", name:"web_search", content:"...", meta:{...}}` |
-| `tool_warning` | `{type:"tool_warning", name:"web_search", reason:"retry exhausted"}` |
-| `checkpoint` | `{type:"checkpoint", step:"anchor_grid", image_url:"..."}` |
-| `done` | `{type:"done", usage:{tokens_in, tokens_out}}` |
+### SSE Events (LamEvent v1 broadcast)
+| LamEvent.event_type | payload.type | Description |
+|---|---|---|
+| `task_progress` | `agent_token` | LLM output token |
+| `task_progress` | `agent_tool_call` | Tool invocation started |
+| `task_progress` | `agent_tool_result` | Tool execution result |
+| `checkpoint_required` | `agent_checkpoint` | Agent paused awaiting user approval |
+| `task_completed` | `agent_done` | Agent finished |
+| `task_failed` | `agent_error` | Agent error |
+| `task_completed` | `agent_cancelled` | Agent cancelled |
 
 ## Concurrency Model
 

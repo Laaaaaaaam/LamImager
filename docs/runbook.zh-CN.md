@@ -111,8 +111,8 @@ curl "http://localhost:8000/api/billing/export" -o billing.csv
 
 ### API 密钥加密失败
 
-1. 加密密钥从机器指纹派生
-2. 如果迁移到新机器，需要重新输入 API 密钥
+1. 加密密钥从文件种子派生（`<DATA_DIR>/.encryption_seed`），首次运行自动创建
+2. 迁移到新机器需要同时拷贝 `.encryption_seed` 文件和数据库
 3. 查看 `app/utils/crypto.py` 中的密钥派生逻辑
 
 ---
@@ -202,7 +202,7 @@ curl http://localhost:8000/api/providers
 3. 如果下载返回 400 错误，检查文件名是否包含特殊字符
 
 ### API 密钥加密
-1. 密钥使用 AES-256-GCM 基于机器指纹加密
-2. 迁移到新机器需要重新输入所有 API 密钥
+1. 密钥使用 AES-256-GCM 基于文件种子加密（`<DATA_DIR>/.encryption_seed`）
+2. 迁移到新机器需要同时拷贝 `.encryption_seed` 文件和数据库
 3. 解密错误会被记录但不会导致服务器崩溃
 4. 查看 `app/utils/crypto.py` 中的密钥派生逻辑

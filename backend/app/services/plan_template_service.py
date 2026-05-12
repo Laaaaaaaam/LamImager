@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.plan_template import PlanTemplate
+from app.schemas.execution import ExecutionPlan, PlanStep
 from app.schemas.plan_template import (
     PlanTemplateCreate,
     PlanTemplateUpdate,
@@ -86,7 +87,7 @@ async def delete_template(db: AsyncSession, template_id: str) -> bool:
     return True
 
 
-async def apply_template(db: AsyncSession, template_id: str, data: PlanTemplateApplyRequest) -> list[dict] | None:
+async def apply_template(db: AsyncSession, template_id: str, data: PlanTemplateApplyRequest) -> ExecutionPlan | None:
     template = await get_template(db, template_id)
     if not template:
         return None
@@ -113,17 +114,34 @@ async def apply_template(db: AsyncSession, template_id: str, data: PlanTemplateA
     def replace_vars(text: str) -> str:
         return re.sub(r'\{\{([\w.]+)\}\}', lambda m: merged_vars.get(m.group(1), ''), text)
 
-    applied = []
-    for step in steps:
-        applied.append({
-            "prompt": replace_vars(step.get("prompt", "")),
-            "negative_prompt": replace_vars(step.get("negative_prompt", "")),
-            "description": replace_vars(step.get("description", "")),
-            "image_count": step.get("image_count", 1),
-            "image_size": step.get("image_size", ""),
-        })
+    plan_steps: list[PlanStep] = []
+    for i, step in enumerate(steps):
+        plan_steps.append(PlanStep(
+            index=i,
+            prompt=replace_vars(step.get("prompt", "")),
+            negative_prompt=replace_vars(step.get("negative_prompt", "")),
+            description=replace_vars(step.get("description", "")),
+            image_count=step.get("image_count", 1),
+            image_size=step.get("image_size", ""),
+            reference_step_indices=step.get("reference_step_indices"),
+            checkpoint=step.get("checkpoint"),
+            condition=step.get("condition"),
+            role=step.get("role", ""),
+            repeat=step.get("repeat", ""),
+        ))
 
-    return applied
+    plan_meta: dict = {"template_id": template.id, "template_name": template.name}
+    if template.strategy == "radiate":
+        plan_meta["items"] = variables.get("items", [])
+        plan_meta["style"] = variables.get("style", "")
+        plan_meta["overall_theme"] = variables.get("overall_theme", "")
+
+    return ExecutionPlan(
+        strategy=template.strategy,
+        steps=plan_steps,
+        source="template",
+        plan_meta=plan_meta,
+    )
 
 
 _BUILTIN_TEMPLATES = [

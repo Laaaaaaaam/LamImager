@@ -288,6 +288,84 @@ PUT /api/settings/{key}
 
 ---
 
+## 供应商/模型
+
+### 列出供应商
+```
+GET /api/vendors
+```
+
+响应: `Vendor[]`
+
+```json
+[
+  {
+    "id": "uuid",
+    "name": "OpenAI",
+    "base_url": "https://api.openai.com",
+    "api_key_masked": "****xxxx",
+    "is_active": true,
+    "model_count": 3,
+    "created_at": "2026-05-10T12:00:00",
+    "updated_at": "2026-05-10T12:00:00"
+  }
+]
+```
+
+### 创建供应商
+```
+POST /api/vendors
+```
+
+请求体:
+```json
+{
+  "name": "OpenAI",
+  "base_url": "https://api.openai.com",
+  "api_key": "sk-xxxxx",
+  "is_active": true
+}
+```
+
+### 获取/更新/删除供应商
+```
+GET /api/vendors/{id}
+PUT /api/vendors/{id}
+DELETE /api/vendors/{id}
+```
+
+### 测试连接
+```
+POST /api/vendors/{id}/test
+```
+
+### 列出供应商下的模型
+```
+GET /api/vendors/{id}/models
+```
+
+响应: `ApiProvider[]`
+
+### 在供应商下创建模型
+```
+POST /api/vendors/{id}/models
+```
+
+请求体:
+```json
+{
+  "nickname": "GPT-4o",
+  "model_id": "gpt-4o",
+  "provider_type": "llm",
+  "billing_type": "per_token",
+  "unit_price": 0.01,
+  "currency": "USD"
+}
+```
+注意：`base_url` 和 `api_key` 继承自供应商。
+
+---
+
 ## 提供商
 
 ### 列出提供商
@@ -763,6 +841,6 @@ GET /api/health
 ```json
 {
   "status": "ok",
-  "version": "0.1.0"
+  "version": "0.3.1-beta"
 }
 ```

@@ -124,11 +124,14 @@ async def execute_iterative(
     reference_images: list[str] | None = None,
     reference_labels: list[dict] | None = None,
 ) -> dict | None:
+    logger.info(f"execute_iterative: start, session_id={session_id}, steps={len(steps)}")
+
     if not steps:
         logger.warning("execute_iterative: no steps to execute")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="没有可执行的步骤")
         return {"error": "没有可执行的步骤", "images": [], "steps": []}
     if not provider_id:
+        logger.error(f"execute_iterative: no image provider configured")
         task_manager.update_task(session_id, TaskStatus.ERROR, message="未配置图像生成API")
         return {"error": "No image provider"}
 
@@ -149,12 +152,16 @@ async def execute_iterative(
     for idx, step in enumerate(steps):
         prompt = step.get("prompt", "")
         if not prompt:
+            logger.warning(f"execute_iterative: step {idx} has empty prompt")
             step_results.append({"step_index": idx, "images": [], "tokens_in": 0, "tokens_out": 0, "error": "empty prompt"})
             continue
         neg_prompt = step.get("negative_prompt", "")
         image_count = step.get("image_count", 1)
         image_size = step.get("image_size", "")
         desc = step.get("description", "") or prompt[:60]
+
+        logger.info(f"execute_iterative: step {idx+1}/{len(steps)}, desc={desc[:40]}")
+
         try:
             task_manager.update_task(session_id, TaskStatus.GENERATING,
                 progress=idx + 1, total=len(steps),
@@ -173,6 +180,7 @@ async def execute_iterative(
             if urls:
                 ref_images = urls[:1]
                 all_images.extend(urls)
+                logger.info(f"execute_iterative: step {idx+1} success, got {len(urls)} images")
                 await add_system_message(db, session_id,
                     f"步骤 {idx + 1}: {desc}",
                     message_type="image",
@@ -184,12 +192,20 @@ async def execute_iterative(
                         billing_type=img_prov.billing_type.value, tokens_in=t_in, tokens_out=t_out,
                         cost=step_cost, currency=img_prov.currency,
                         detail={"type": "image_gen", "plan": "iterative", "step_index": idx, "image_count": len(urls)})
+            else:
+                logger.warning(f"execute_iterative: step {idx+1} returned no images")
             total_t_in += t_in
             total_t_out += t_out
             step_results.append({"step_index": idx, "images": urls, "tokens_in": t_in, "tokens_out": t_out})
         except Exception as e:
             logger.error(f"Iterative step {idx} failed: {e}")
             step_results.append({"step_index": idx, "images": [], "tokens_in": 0, "tokens_out": 0, "error": str(e)})
+
+    logger.info(
+        f"execute_iterative: completed, "
+        f"total_images={len(all_images)}, "
+        f"tokens_in={total_t_in}, tokens_out={total_t_out}"
+    )
 
     task_manager.update_task(session_id, TaskStatus.IDLE)
     return {

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.schemas.session import (
+    ExecutePlanRequest,
     GenerateRequest,
     MessageCreate,
     MessageResponse,
@@ -25,7 +26,7 @@ from app.services.session_manager import (
     message_to_response,
     update_session,
 )
-from app.services.generate_service import handle_generate, handle_agent_generate
+from app.services.generate_service import handle_generate, handle_agent_generate, handle_execute_plan
 from app.services.task_manager import TaskManager
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -109,6 +110,11 @@ async def api_generate(session_id: str, data: GenerateRequest, db: AsyncSession 
     else:
         result = await handle_generate(db, data)
     return result
+
+
+@router.post("/{session_id}/execute-plan")
+async def api_execute_plan(session_id: str, data: ExecutePlanRequest, db: AsyncSession = Depends(get_db)):
+    return await handle_execute_plan(db, session_id, data)
 
 
 @router.post("/{session_id}/cancel")

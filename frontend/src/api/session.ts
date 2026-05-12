@@ -19,8 +19,18 @@ export const sessionApi = {
 
   generate: (data: GenerateRequest) => api.post(`/sessions/${data.session_id}/generate`, data),
 
+  executePlan: (sessionId: string, data: {
+    strategy: string
+    steps: { prompt: string; negative_prompt?: string; description?: string; image_count?: number; image_size?: string }[]
+    reference_images?: string[]
+    reference_labels?: Record<string, unknown>[]
+    context_messages?: Record<string, unknown>[]
+    negative_prompt?: string
+    image_size?: string
+  }) => api.post(`/sessions/${sessionId}/execute-plan`, data),
+
   cancel: (id: string) => api.post(`/sessions/${id}/cancel`),
 
-  checkpoint: (id: string, action: 'approve' | 'skip' | 'reject', feedback: string = '') =>
-    api.post(`/sessions/${id}/agent/checkpoint`, { action, feedback }),
+  checkpoint: (id: string, approved: boolean, feedback: string = '') =>
+    api.post(`/sessions/${id}/agent/checkpoint`, { approved, feedback }),
 }

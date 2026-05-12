@@ -78,6 +78,13 @@ async def init_db():
             if "builtin_version" not in pt_columns:
                 await conn.execute(text("ALTER TABLE plan_templates ADD COLUMN builtin_version INTEGER DEFAULT 0"))
 
+        result = await conn.execute(text("PRAGMA table_info('skills')"))
+        skill_columns = [row[1] for row in result.fetchall()]
+        if "strategy" not in skill_columns:
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN strategy VARCHAR(20) DEFAULT ''"))
+        if "steps" not in skill_columns:
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN steps JSON DEFAULT '[]'"))
+
     async with async_session() as session:
         from app.services.plan_template_service import seed_builtin_templates
         await seed_builtin_templates(session)

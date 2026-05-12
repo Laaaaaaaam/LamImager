@@ -73,6 +73,8 @@ export interface Skill {
   prompt_template: string
   parameters: Record<string, unknown>
   is_builtin: boolean
+  strategy: string
+  steps: Record<string, unknown>[]
   created_at: string
 }
 
@@ -302,4 +304,34 @@ export interface AgentStreamStep {
   args?: Record<string, unknown>
   content?: string
   meta?: Record<string, unknown>
+}
+
+export interface ContextImage {
+  url: string
+  source: 'upload' | 'context' | 'refine'
+  name: string
+  preview?: string
+}
+
+export interface Attachment {
+  name: string
+  type: string
+  size: number
+  preview?: string
+  content?: string
+}
+
+export interface DialogToolCall {
+  id: string
+  name: string
+  args: Record<string, unknown>
+  content: string
+  collapsed: boolean
+}
+
+export interface DialogMessage {
+  id: number
+  role: string
+  content: string
+  attachments?: Attachment[]
 }

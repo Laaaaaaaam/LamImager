@@ -59,3 +59,21 @@ class GenerateRequest(BaseModel):
     agent_mode: bool = False
     agent_tools: list[str] = []
     agent_plan_strategy: str = ""
+
+
+class ExecutePlanStep(BaseModel):
+    prompt: str
+    negative_prompt: str = ""
+    description: str = ""
+    image_count: int = 1
+    image_size: str = ""
+
+
+class ExecutePlanRequest(BaseModel):
+    strategy: str = "parallel"
+    steps: list[ExecutePlanStep] = []
+    reference_images: list[str] = []
+    reference_labels: list[dict] = []
+    context_messages: list[dict] = []
+    negative_prompt: str = ""
+    image_size: str = "1024x1024"

@@ -63,9 +63,13 @@ async def api_delete_template(template_id: str, db: AsyncSession = Depends(get_d
 @router.post("/{template_id}/apply")
 async def api_apply_template(template_id: str, data: PlanTemplateApplyRequest, db: AsyncSession = Depends(get_db)):
     try:
-        steps = await apply_template(db, template_id, data)
+        plan = await apply_template(db, template_id, data)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    if steps is None:
+    if plan is None:
         raise HTTPException(status_code=404, detail="Template not found")
-    return {"steps": steps}
+    return {
+        "plan": plan.model_dump(),
+        "steps": plan.to_steps_dict(),
+        "strategy": plan.strategy,
+    }
