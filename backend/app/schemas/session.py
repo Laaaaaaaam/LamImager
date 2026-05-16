@@ -59,6 +59,8 @@ class GenerateRequest(BaseModel):
     agent_mode: bool = False
     agent_tools: list[str] = []
     agent_plan_strategy: str = ""
+    refine_mode: bool = False
+    selected_image_url: str = ""
 
 
 class ExecutePlanStep(BaseModel):
@@ -67,6 +69,8 @@ class ExecutePlanStep(BaseModel):
     description: str = ""
     image_count: int = 1
     image_size: str = ""
+    reference_step_indices: list[int] | None = None
+    metadata: dict = {}
 
 
 class ExecutePlanRequest(BaseModel):

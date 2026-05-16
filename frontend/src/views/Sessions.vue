@@ -13,13 +13,16 @@
           v-for="s in sessions"
           :key="s.id"
           class="session-item"
-          :class="{ active: s.id === currentSessionId }"
+          :class="{ active: s.id === currentSessionId, 'checkpoint-pending': hasCheckpointPending(s.id) }"
           @click="selectSession(s.id)"
           @contextmenu.prevent="showContextMenu($event, s)"
         >
           <div class="session-title-row">
             <span class="session-title">{{ s.title }}</span>
-            <span v-if="getSessionStatus(s.id) === 'generating'" class="status-badge generating">
+            <span v-if="hasCheckpointPending(s.id)" class="status-badge checkpoint">
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> 待确认
+            </span>
+            <span v-else-if="getSessionStatus(s.id) === 'generating'" class="status-badge generating">
               <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="icon-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> 生成中
             </span>
             <span v-else-if="getSessionStatus(s.id) === 'optimizing'" class="status-badge optimizing">
@@ -50,6 +53,9 @@
         :task-type-label="currentTaskLabel"
         :progress-text="getTaskProgress(currentSessionId || '')"
         :agent-stream-state="agentStreamState"
+        :agent-progress="agentProgress"
+        :timeline-messages="timelineMessages"
+        :checkpoint-state="agentCheckpointState"
         @copy="copyMessageContent"
         @open-image="openImage"
         @image-context="showImageContextMenu"
@@ -59,6 +65,10 @@
         @enter-refine="enterRefineMode"
         @apply-optimized="applyOptimized"
         @cancel="cancelAgent"
+        @checkpoint-approve="resolveAgentCheckpoint('approve')"
+        @checkpoint-retry="resolveAgentCheckpoint('retry_step')"
+        @checkpoint-replan="resolveAgentCheckpoint('replan')"
+        @checkpoint-cancel="resolveAgentCheckpoint('cancel')"
       />
 
       <CompareOverlay :images="comparingImages" @close="comparingImages = []" @download-all="downloadAll" />
@@ -145,26 +155,6 @@
       @update-plan-step="updatePlanStep"
     />
 
-    <div v-if="planCheckpoint" class="checkpoint-overlay">
-      <div class="checkpoint-card">
-        <p>{{ planCheckpoint.message }}</p>
-        <div class="checkpoint-actions">
-          <button class="btn btn-primary" @click="continuePlan">继续执行</button>
-          <button class="btn" @click="abortPlan">终止规划</button>
-        </div>
-      </div>
-    </div>
-
-    <CheckpointOverlay
-      :visible="agentCheckpointState.visible"
-      :message="agentCheckpointState.message"
-      :tool-name="agentCheckpointState.toolName"
-      :preview-url="agentCheckpointState.previewUrl"
-      @approve="resolveAgentCheckpoint(true)"
-      @reject="resolveAgentCheckpoint(false)"
-      @skip="resolveAgentCheckpoint(true)"
-    />
-
     <ContextMenu :visible="contextMenu.show" :x="contextMenu.x" :y="contextMenu.y"
       :items="[{ label: '重命名', action: 'rename' }, { label: '删除', action: 'delete' }]"
       @action="(a: string) => contextMenuAction(a)" />
@@ -186,7 +176,6 @@ import { useBillingStore } from '../stores/billing'
 import type { Skill, DefaultModelsConfig, TaskHandle, TaskUpdateEvent, PlanStep, PlanTemplate, TemplateVariable, AgentStreamState, LamEvent } from '../types'
 import { dialog } from '../composables/useDialog'
 import { useSessionEvents } from '../composables/useSessionEvents'
-import CheckpointOverlay from '../components/session/CheckpointOverlay.vue'
 import Lightbox from '../components/session/Lightbox.vue'
 import CompareOverlay from '../components/session/CompareOverlay.vue'
 import ContextMenu from '../components/session/ContextMenu.vue'
@@ -208,7 +197,9 @@ const messages = computed(() => store.messages)
 const inputText = ref('')
 const agentMode = ref(false)
 const agentStreamState = ref<AgentStreamState | null>(null)
-const agentCheckpointState = ref<{ visible: boolean; message: string; toolName?: string; previewUrl?: string; correlationId?: string }>({
+const agentProgress = ref<{ current: number; total: number } | null>(null)
+const timelineMessages = ref<Message[]>([])
+const agentCheckpointState = ref<{ visible: boolean; message: string; toolName?: string; previewUrl?: string; imageUrls?: string[]; correlationId?: string; stepDescription?: string }>({
   visible: false,
   message: '',
 })
@@ -427,6 +418,10 @@ function getTaskProgress(sessionId: string): string {
   return `${task.progress}/${task.total}`
 }
 
+function hasCheckpointPending(sessionId: string): boolean {
+  return store.getCheckpoint(sessionId)?.visible === true
+}
+
 const TASK_TYPE_LABELS: Record<string, string> = {
   single: '单图生成',
   multi_independent: '多图并行',
@@ -458,6 +453,9 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
     if (event.message) {
       generatingText.value = event.message
     }
+    if (event.progress !== undefined && event.total !== undefined && event.total > 0) {
+      agentProgress.value = { current: event.progress, total: event.total }
+    }
     store.fetchSessions()
   },
   (tasks) => {
@@ -475,27 +473,37 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
     }
   },
   (event: LamEvent) => {
+    const eventSid = event.payload?.session_id || ''
     if (event.event_type === 'task_started' && event.payload.type === 'task_started') {
-      const sid = event.payload.session_id
-      agentStreamState.value = {
-        sessionId: sid,
+      if (store.getAgentStream(eventSid)) return
+      const streamState: AgentStreamState = {
+        sessionId: eventSid,
         status: 'thinking',
         content: '',
         steps: [],
         cost: null,
       }
-      store.setAgentStream(sid, agentStreamState.value)
+      store.setAgentStream(eventSid, streamState)
+      if (eventSid === currentSessionId.value) {
+        agentStreamState.value = streamState
+      }
       return
     }
-    if (agentStreamState.value) {
-      const sid = agentStreamState.value.sessionId
-      if (event.payload.session_id !== sid) return
+    if (agentStreamState.value && eventSid === agentStreamState.value.sessionId) {
       const state = { ...agentStreamState.value, steps: [...agentStreamState.value.steps] }
       switch (event.payload.type) {
-        case 'agent_token':
+        case 'agent_token': {
+          const node = event.payload.node || ''
+          if (node) {
+            const nodeStep = state.steps.find(s => s.type === 'node_progress' && s.name === node && s.status === 'running')
+            if (nodeStep) {
+              nodeStep.content = (nodeStep.content || '') + (event.payload.content || '')
+            }
+          }
           state.content += event.payload.content || ''
           state.status = 'thinking'
           break
+        }
         case 'agent_tool_call':
           state.steps.push({
             id: event.event_id,
@@ -516,12 +524,88 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
           state.status = 'thinking'
           break
         }
-        case 'agent_done':
+        case 'agent_node_progress': {
+          const nodeName = event.payload.node || ''
+          if (nodeName === 'decision' && event.payload.detail?.result) {
+            const result = event.payload.detail.result as string
+            const rollbackMap: Record<string, string> = {
+              retry_prompt: 'prompt_builder',
+              retry_step: 'executor',
+              replan: 'planner',
+            }
+            const target = rollbackMap[result]
+            if (target) {
+              const idx = state.steps.findIndex(s => s.name === target)
+              if (idx >= 0) state.steps = state.steps.slice(0, idx)
+            }
+          }
+          const existingStep = state.steps.find(s => s.type === 'node_progress' && s.name === nodeName)
+          if (existingStep) {
+            const newStatus = event.payload.status || 'done'
+            const stepContent = event.payload.content || event.payload.message || ''
+            if (nodeName === 'executor' && newStatus === 'step_done' && event.payload.detail) {
+              const completedSteps = (existingStep.meta?.completed_steps as any[]) || []
+              completedSteps.push(event.payload.detail)
+              existingStep.meta = { ...existingStep.meta, completed_steps: completedSteps }
+              existingStep.content = stepContent
+            } else {
+              existingStep.status = newStatus
+              existingStep.content = stepContent
+              existingStep.meta = event.payload.detail
+            }
+          } else {
+            const stepContent = event.payload.content || event.payload.message || ''
+            if (nodeName === 'executor' && event.payload.status === 'step_done' && event.payload.detail) {
+              state.steps.push({
+                id: event.event_id,
+                type: 'node_progress',
+                name: nodeName,
+                status: 'running',
+                content: stepContent,
+                meta: { completed_steps: [event.payload.detail] },
+              })
+            } else {
+              state.steps.push({
+                id: event.event_id,
+                type: 'node_progress',
+                name: nodeName,
+                status: event.payload.status || 'done',
+                content: stepContent,
+                meta: event.payload.detail,
+              })
+            }
+          }
+          if (event.payload.status === 'running') {
+            state.status = 'thinking'
+          }
+          break
+        }
+        case 'agent_tool_warning': {
+          state.steps.push({
+            id: event.event_id,
+            type: 'tool_call',
+            name: event.payload.name || 'warning',
+            status: 'error',
+            content: event.payload.content || event.payload.message || '',
+          })
+          break
+        }
+        case 'agent_done': {
           state.status = 'done'
           state.cost = event.payload.cost || null
+          agentProgress.value = null
+          for (const step of state.steps) {
+            if (step.status === 'running') step.status = 'done'
+          }
+          store.fetchMessages(eventSid)
+          store.fetchSessions()
           break
+        }
         case 'agent_error':
           state.status = 'error'
+          agentProgress.value = null
+          store.fetchMessages(eventSid)
+          store.fetchSessions()
           break
         case 'agent_cancelled':
           state.status = 'done'
@@ -529,22 +613,54 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
           break
       }
       agentStreamState.value = state
-      store.setAgentStream(sid, state)
+      store.setAgentStream(eventSid, state)
     }
     if (event.event_type === 'checkpoint_required' && event.payload.type === 'agent_checkpoint') {
-      agentCheckpointState.value = {
+      const cpSessionId = event.payload.session_id
+      if (store.getCheckpoint(cpSessionId)?.visible) return
+      const artifacts = event.payload.artifacts || []
+      const imageUrls = artifacts.filter((a: any) => a.type === 'image').map((a: any) => a.url)
+      const cpInfo = {
         visible: true,
         message: event.payload.message || '确认执行',
         toolName: event.payload.tool_name,
-        previewUrl: event.payload.preview,
-        correlationId: event.payload.session_id,
+        previewUrl: imageUrls[0] || '',
+        imageUrls,
+        stepDescription: event.payload.step?.description || '',
+      }
+      store.setCheckpoint(cpSessionId, cpInfo)
+      if (cpSessionId === currentSessionId.value) {
+        agentCheckpointState.value = {
+          visible: true,
+          message: cpInfo.message,
+          toolName: cpInfo.toolName,
+          previewUrl: cpInfo.previewUrl,
+          imageUrls: cpInfo.imageUrls,
+          correlationId: cpSessionId,
+          stepDescription: cpInfo.stepDescription,
+        }
+      }
+    }
+    if (event.event_type === 'task_completed' || event.event_type === 'task_failed') {
+      if (eventSid) {
+        if (eventSid !== currentSessionId.value) {
+          store.clearAgentStream(eventSid)
+          store.clearCheckpoint(eventSid)
+        } else {
+          setTimeout(() => {
+            if (agentStreamState.value?.sessionId === eventSid && agentStreamState.value.status === 'done') {
+              agentStreamState.value = null
+              store.clearAgentStream(eventSid)
+            }
+          }, 3000)
+        }
       }
     }
   },
 )
 
 onMounted(async () => {
-  connectEvents()
+  connectEvents(currentSessionId.value || undefined)
   await store.fetchSessions()
   if (sessions.value.length) {
     await store.selectSession(sessions.value[0].id)
@@ -739,6 +855,7 @@ async function newSession() {
 async function selectSession(id: string) {
   await store.selectSession(id)
   clearContextImages()
+  timelineMessages.value = []
   inputText.value = ''
   negativePrompt.value = ''
   attachments.value = []
@@ -750,7 +867,25 @@ async function selectSession(id: string) {
   if (memoryMode.value === 'session') {
     assistantSidebarRef.value?.clearDialog()
   }
+  const cpInfo = store.getCheckpoint(id)
+  if (cpInfo?.visible) {
+    agentCheckpointState.value = {
+      visible: true,
+      message: cpInfo.message,
+      toolName: cpInfo.toolName,
+      previewUrl: cpInfo.previewUrl,
+      imageUrls: cpInfo.imageUrls,
+      correlationId: id,
+      stepDescription: cpInfo.stepDescription,
+    }
+  } else {
+    agentCheckpointState.value = { visible: false, message: '' }
+  }
+  const savedStream = store.getAgentStream(id)
+  agentStreamState.value = savedStream || null
   refreshAutoContext()
+  disconnectEvents()
+  connectEvents(id)
 }
 
 async function cancelAgent() {
@@ -764,18 +899,19 @@ async function cancelAgent() {
   }
 }
 
-async function resolveAgentCheckpoint(approved: boolean) {
+async function resolveAgentCheckpoint(action: string) {
   const sid = agentCheckpointState.value.correlationId
   if (!sid) {
     agentCheckpointState.value.visible = false
     return
   }
   try {
-    await sessionApi.checkpoint(sid, approved)
+    await sessionApi.checkpoint(sid, action)
   } catch (e: any) {
     console.error('Checkpoint resolve failed:', e)
   }
   agentCheckpointState.value.visible = false
+  store.clearCheckpoint(sid)
 }
 
 async function sendGenerate() {
@@ -823,18 +959,34 @@ async function sendGenerate() {
     promptWithContext = promptWithContext + '\n' + docContexts
   }
 
-  const ctxUrls = contextImageList.value
-    .filter(img => img.source === 'context')
-    .map(img => img.url)
+  const recentImageUrls: string[] = []
+  for (let i = messages.value.length - 1; i >= 0 && recentImageUrls.length < 4; i--) {
+    const m = messages.value[i]
+    if (m.message_type === 'image' && m.metadata?.image_urls && Array.isArray(m.metadata.image_urls)) {
+      for (const url of (m.metadata.image_urls as string[])) {
+        if (!recentImageUrls.includes(url)) {
+          recentImageUrls.push(url)
+          if (recentImageUrls.length >= 4) break
+        }
+      }
+    } else if (m.message_type === 'agent' && m.metadata?.images && Array.isArray(m.metadata.images)) {
+      for (const url of (m.metadata.images as string[])) {
+        if (!recentImageUrls.includes(url) && typeof url === 'string' && url.startsWith('http')) {
+          recentImageUrls.push(url)
+          if (recentImageUrls.length >= 4) break
+        }
+      }
+    }
+  }
 
   const contextMessages = messages.value.slice(-10).map(m => {
     const entry: { role: string; content: string; image_urls?: string[] } = {
       role: m.role,
       content: m.content,
     }
-    if (m.message_type === 'image' && m.metadata?.image_urls && ctxUrls.length) {
+    if (m.message_type === 'image' && m.metadata?.image_urls && Array.isArray(m.metadata.image_urls)) {
       const urls = (m.metadata.image_urls as string[]).filter((url: string) =>
-        ctxUrls.includes(url)
+        recentImageUrls.includes(url)
       )
       if (urls.length) {
         entry.image_urls = urls
@@ -878,6 +1030,13 @@ async function sendGenerate() {
       generateData.agent_tools = ['web_search', 'image_search']
     }
 
+    if (isRefineMode.value) {
+      generateData.refine_mode = true
+      if (refineImages.length > 0) {
+        generateData.selected_image_url = refineImages[0].url
+      }
+    }
+
     await store.generate(sid, generateData)
     inputText.value = ''
     negativePrompt.value = ''
@@ -891,9 +1050,11 @@ async function sendGenerate() {
     dialog.showAlert('发送失败: ' + (e.message || '未知错误'))
     console.error('sendGenerate error:', e)
   } finally {
-    const task = activeTasks.value.get(sid)
-    if (task) task.status = 'done'
-    setTimeout(() => activeTasks.value.delete(sid), 3000)
+    if (!agentMode.value) {
+      const task = activeTasks.value.get(sid)
+      if (task) task.status = 'done'
+      setTimeout(() => activeTasks.value.delete(sid), 3000)
+    }
     billingStore.fetchSummary()
   }
 }
@@ -1274,9 +1435,6 @@ function updatePlanStep(payload: { index: number; field: string; value: any }) {
   }
 }
 
-const planCheckpoint = ref<{ stepIndex: number; message: string } | null>(null)
-let planCheckpointResolve: (() => void) | null = null
-
 async function executePlan() {
   const sid = currentSessionId.value
   if (!sid) return
@@ -1327,23 +1485,6 @@ async function executePlan() {
   planSteps.value = []
   billingStore.fetchSummary()
   await store.fetchSessions()
-}
-
-function continuePlan() {
-  planCheckpointResolve?.()
-  planCheckpointResolve = null
-}
-
-function abortPlan() {
-  const sid = currentSessionId.value
-  if (sid) {
-    const task = activeTasks.value.get(sid)
-    if (task) task.status = 'done'
-    setTimeout(() => activeTasks.value.delete(sid), 1000)
-  }
-  planCheckpoint.value = null
-  planCheckpointResolve = null
-  planSteps.value = []
 }
 
 async function saveAsTemplate() {
@@ -1538,6 +1679,7 @@ watch(selectedSkillIds, (ids) => {
 .session-items {
   flex: 1;
   overflow-y: auto;
+  min-height: 0;
 }
 
 .session-item {
@@ -1553,6 +1695,21 @@ watch(selectedSkillIds, (ids) => {
 
 .session-item.active {
   background: var(--active);
+}
+
+.session-item.checkpoint-pending {
+  animation: checkpoint-flash 2s ease-in-out infinite;
+}
+
+@keyframes checkpoint-flash {
+  0%, 100% { background: transparent; }
+  50% { background: #fef3c7; }
+}
+
+.session-item.active.checkpoint-pending {
+  animation: none;
+  background: var(--active);
+  border-left: 3px solid #d97706;
 }
 
 .session-title {
@@ -1602,6 +1759,17 @@ watch(selectedSkillIds, (ids) => {
 .status-badge.error {
   background: #000;
   color: #fff;
+}
+
+.status-badge.checkpoint {
+  background: #d97706;
+  color: #fff;
+  animation: badge-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .task-progress {
@@ -1696,36 +1864,5 @@ watch(selectedSkillIds, (ids) => {
 
 .negative-input:focus {
   border-color: var(--accent);
-}
-
-.checkpoint-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
-
-.checkpoint-card {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 24px;
-  max-width: 360px;
-  width: 90%;
-  text-align: center;
-}
-
-.checkpoint-card p {
-  margin: 0 0 16px 0;
-  font-size: 14px;
-}
-
-.checkpoint-actions {
-  display: flex;
-  gap: 8px;
-  justify-content: center;
 }
 </style>
