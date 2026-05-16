@@ -12,5 +12,5 @@ class AppSetting(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_uuid)
     key: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    value: Mapped[str] = mapped_column(JSON, default=dict)
+    value: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)

@@ -84,8 +84,12 @@ const form = reactive({
 onMounted(loadSkills)
 
 async function loadSkills() {
-  const { data } = await skillApi.list()
-  skills.value = data
+  try {
+    const { data } = await skillApi.list()
+    skills.value = data
+  } catch {
+    dialog.showAlert('加载技能列表失败')
+  }
 }
 
 function openDrawer(skill?: Skill) {
@@ -106,19 +110,27 @@ async function saveSkill() {
   let params = {}
   try { params = JSON.parse(paramsJson.value) } catch { dialog.showAlert('参数 JSON 格式无效'); return }
 
-  if (editingSkill.value) {
-    await skillApi.update(editingSkill.value.id, { ...form, parameters: params })
-  } else {
-    await skillApi.create({ ...form, parameters: params })
+  try {
+    if (editingSkill.value) {
+      await skillApi.update(editingSkill.value.id, { ...form, parameters: params })
+    } else {
+      await skillApi.create({ ...form, parameters: params })
+    }
+    await loadSkills()
+    drawerOpen.value = false
+  } catch {
+    dialog.showAlert('保存技能失败')
   }
-  await loadSkills()
-  drawerOpen.value = false
 }
 
 async function removeSkill(id: string) {
   if (await dialog.showConfirm('确定删除此技能？')) {
-    await skillApi.delete(id)
-    await loadSkills()
+    try {
+      await skillApi.delete(id)
+      await loadSkills()
+    } catch {
+      dialog.showAlert('删除技能失败')
+    }
   }
 }
 </script>

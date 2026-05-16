@@ -14,7 +14,7 @@ class PlanTemplate(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     strategy: Mapped[str] = mapped_column(String(20), default="parallel")
-    steps: Mapped[dict] = mapped_column(JSON, default=list)
+    steps: Mapped[list] = mapped_column(JSON, default=list)
     variables: Mapped[dict] = mapped_column(JSON, default=dict)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
     builtin_version: Mapped[int] = mapped_column(Integer, default=0)

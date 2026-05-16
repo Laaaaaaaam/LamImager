@@ -396,6 +396,8 @@ const imageContextMenu = ref({ show: false, x: 0, y: 0, url: '' })
 let contextMenuTimer: ReturnType<typeof setTimeout> | null = null
 
 function isSessionBusy(sessionId: string): boolean {
+  const stream = store.getAgentStream(sessionId)
+  if (stream && (stream.status === 'done' || stream.status === 'error' || stream.status === 'cancelled')) return false
   const task = activeTasks.value.get(sessionId)
   return task?.status === 'running'
 }
@@ -490,12 +492,18 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
         break
       case 'agent_done':
         store.handleAgentDone(eventSid, event)
+        activeTasks.value.delete(eventSid)
+        generatingText.value = ''
         break
       case 'agent_error':
         store.handleAgentError(eventSid, event)
+        activeTasks.value.delete(eventSid)
+        generatingText.value = ''
         break
       case 'agent_cancelled':
         store.handleAgentCancelled(eventSid, event)
+        activeTasks.value.delete(eventSid)
+        generatingText.value = ''
         break
       case 'agent_checkpoint':
         store.handleCheckpoint(eventSid, event)
@@ -503,6 +511,8 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
     }
     if (event.event_type === 'task_completed' || event.event_type === 'task_failed') {
       store.handleTaskCompleted(eventSid)
+      activeTasks.value.delete(eventSid)
+      generatingText.value = ''
     }
   },
 )
@@ -748,6 +758,19 @@ async function sendGenerate() {
   if (!sid || isSessionBusy(sid)) return
 
   console.log('[send] agentMode:', agentMode.value, 'sid:', sid?.slice(0,8), 'prompt:', inputText.value?.slice(0,30))
+
+  const userMessageText = inputText.value.trim()
+  if (userMessageText) {
+    store.messages.push({
+      id: `local-${Date.now()}`,
+      session_id: sid,
+      role: 'user',
+      content: userMessageText,
+      message_type: 'text',
+      metadata: {},
+      created_at: new Date().toISOString(),
+    })
+  }
 
   if (agentMode.value) {
     store.handleAgentStarted(sid, { event_type: 'task_started', event_id: '', timestamp: Date.now(), source_product: '', target_product: null, correlation_id: '', payload: { type: 'task_started', session_id: sid } } as LamEvent)

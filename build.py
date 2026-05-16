@@ -17,8 +17,8 @@ DIST_DIR = PROJECT_ROOT / "dist"
 
 
 def check_python_version():
-    if sys.version_info < (3, 9):
-        print("Error: Python 3.9+ is required.")
+    if sys.version_info < (3, 14):
+        print("Error: Python 3.14+ is required.")
         sys.exit(1)
     print(f"Python version: {sys.version}")
 

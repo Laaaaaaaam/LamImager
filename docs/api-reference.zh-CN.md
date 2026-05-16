@@ -199,17 +199,20 @@ POST /api/sessions/{id}/cancel
 ```
 POST /api/sessions/{id}/agent/checkpoint
 ```
-批准或拒绝 Agent 检查点 (如锚点网格质量检查)。Checkpoint 在 300 秒超时后自动拒绝。
+批准、重试或重新规划 Agent 检查点 (如锚点网格质量检查)。Checkpoint 在 300 秒超时后自动拒绝。
 
 请求体:
 ```json
 {
   "action": "approve",
-  "feedback": ""
+  "feedback": "",
+  "retry_level": "approve"
 }
 ```
 
-`action` 值: `"approve"` (继续) | `"reject"` (中止)。非 approve 值均视为拒绝。
+`action` 值: `"approve"` (继续) | `"retry_step"` (重新执行当前步骤) | `"replan"` (回到规划节点)。其他值均视为拒绝。
+
+`retry_level` 值: `"approve"` | `"retry_step"` | `"replan"` — 如省略，从 `action` 推导。
 
 响应:
 ```json
@@ -841,6 +844,8 @@ GET /api/health
 ```json
 {
   "status": "ok",
-  "version": "0.3.1-beta"
+  "version": "0.4.0-alpha",
+  "author": "霖二",
+  "license": "MIT"
 }
 ```

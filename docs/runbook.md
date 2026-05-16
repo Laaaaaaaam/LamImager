@@ -39,7 +39,7 @@ Access: http://localhost:8000
 ### Backend Health
 ```bash
 curl http://localhost:8000/api/health
-# Expected: {"status": "ok", "version": "0.1.0"}
+# Expected: {"status": "ok", "version": "0.4.0-alpha", ...}
 ```
 
 ### Database Check

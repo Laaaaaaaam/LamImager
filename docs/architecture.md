@@ -19,7 +19,7 @@ LamImager is a monolithic web application for managing AI image generation tasks
 │                    FastAPI Backend                          │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
 │  │   Routers   │→ │  Services   │→ │   Models    │        │
-│  │ (11 modules)│  │ (16 services)│  │ (10 tables)│        │
+│  │ (11 modules)│  │ (17 services)│  │ (10 tables)│        │
 │  └─────────────┘  └─────────────┘  └──────┬──────┘        │
 │                                           │                │
 │  ┌────────────────────────────────────────┼──────────────┐ │
@@ -44,7 +44,7 @@ LamImager is a monolithic web application for managing AI image generation tasks
 | Component | Purpose | Files |
 |-----------|---------|-------|
 | Routers | HTTP endpoint definitions | `app/routers/*.py` |
-| Services | Business logic, external API calls | `app/services/*.py` (15: agent_bridge, agent_intent, agent_service, api_manager, billing, generate, plan_executor, plan_template, prompt_optimizer, reference, rule_engine, session_manager, settings, skill_engine, task_manager) |
+| Services | Business logic, external API calls | `app/services/*.py` (16: agent_bridge, agent_intent, agent_service, api_manager, billing, generate, plan_execution, plan_template, planning_context, prompt_optimizer, reference, rule_engine, session_manager, settings, skill_engine, task_manager) |
 | Models | SQLAlchemy ORM definitions | `app/models/*.py` |
 | Schemas | Pydantic validation/serialization | `app/schemas/*.py` |
 | Utils | Crypto, LLM client, Image client | `app/utils/*.py` |
@@ -212,8 +212,8 @@ The `useMarkdown.ts` composable sanitizes markdown rendering:
 | `assistant` | 小助手对话 | `stream_llm_chat` (stream_type="assistant") |
 | `plan` | 规划生成 | `stream_llm_chat` (stream_type="plan") via `/api/prompt/plan` |
 | `vision` | 视觉分析 | `_describe_reference_images` |
-| `agent` | Agent执行 | `run_agent_loop` (final billing) |
-| `tool` | 工具调用 | `run_agent_loop` (per-tool-call billing, e.g. web_search) |
+| `agent` | Agent执行 | `llm_call_logger.log_and_bill()` (per LLM node in graph) |
+| `tool` | 工具调用 | `_enhance_with_search()` (web_search/image_search), `llm_call_logger.log_and_bill()` (graph LLM nodes) |
 
 ### Image Generation
 - Per-call billing: Call count = image_count
@@ -237,30 +237,43 @@ The `useMarkdown.ts` composable sanitizes markdown rendering:
 
 ## Agent System
 
-The Agent system provides LLM-driven autonomous tool orchestration through Function Calling.
+The Agent system provides LLM-driven autonomous task orchestration, now powered by LangGraph StateGraph (Phase 2).
 
-### Architecture
+### LangGraph Architecture
 
+Two co-existing graph configurations:
+
+**Sidebar Assistant (2-node loop)** — replaces old `AgentLoop`:
 ```
-User Input (Agent mode)
-    │
-    ▼
-┌──────────────────────────────────────┐
-│              AgentLoop               │
-│  LLM Chat → Detect tool_calls →      │
-│  Execute tools → Inject results →    │
-│  Loop until finish_reason=stop        │
-└──────────┬───────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────┐
-│              Tool Registry            │
-│  web_search → Serper API             │
-│  image_search → Serper API           │
-│  generate_image → ImageClient        │
-│  plan → plan_template_service        │
-└──────────────────────────────────────┘
+agent_node (LLM + tools) ⇄ tools_node (execution) → END
 ```
+
+**Agent Mode (9-node)** — full planning pipeline:
+```
+intent → skill_matcher → skill → context_enrichment → planner → prompt_builder → executor → (critic → decision → retry)
+```
+
+See `AGENTS.md` for full node descriptions.
+
+### Graph Files
+| File | Purpose |
+|------|---------|
+| `core/agent/state.py` | `AgentState` TypedDict shared across all nodes |
+| `core/agent/graph.py` | `build_agent_graph()` (2-node) + `build_agent_mode_graph()` (9-node) + `executor_node` + routing functions |
+| `core/agent/graph_llm.py` | `agent_node` — LLM streaming with tool calling |
+| `core/agent/graph_tools.py` | `tools_node` — tool execution + billing |
+| `core/agent/capability_prompts.py` | Strategy-aware system prompts: PLANNER_STRATEGY_GUIDE, IMAGE_PROVIDER_CAPABILITIES, PROMPT_BUILDER_GUIDE, CRITIC_EVALUATION_DIMENSIONS |
+| `core/agent/llm_call_logger.py` | Unified LLM call logging + billing: LLMCallRecord, extract_tokens, log_and_bill, LLMTimer |
+| `core/agent/nodes/intent_node.py` | Pure LLM intent classification via `classify_intent_with_llm()` |
+| `core/agent/nodes/skill_matcher_node.py` | Keyword overlap + strategy_hint scoring, top-3 activation |
+| `core/agent/nodes/skill_node.py` | Reads skill_ids → outputs skill_hints |
+| `core/agent/nodes/context_node.py` | Delegates to `PlanningContextManager`, token budget truncation |
+| `core/agent/nodes/planner_node.py` | LLM-driven `ExecutionPlan` generation with capability prompts |
+| `core/agent/nodes/prompt_builder_node.py` | Multimodal prompt optimization, critic feedback injection |
+| `core/agent/nodes/critic_node.py` | Vision LLM scoring (0-10), multimodal model check |
+| `core/agent/nodes/decision_node.py` | Retry routing (pass/warn/retry_prompt/retry_step), retry_step_index |
+| `core/agent/critic_interface.py` | `CriticOutput` dataclass (P2↔P3) |
+| `services/planning_context.py` | `PlanningContextManager` — token budget, dedup, cache, relevance filter |
 
 ### Tools (backend/app/tools/)
 - **base.py**: `Tool` abstract class + `ToolResult` dataclass
@@ -270,6 +283,7 @@ User Input (Agent mode)
 
 ### AgentLoop (backend/app/services/agent_service.py)
 - `run_agent_loop()`: async generator yielding `AgentEvent` types (TokenEvent, ToolCallEvent, ToolResultEvent, DoneEvent, CancelledEvent, WarningEvent)
+- Used as fallback for sidebar assistant when `use_langgraph=false`
 - `tool_choice`: `"required"` on rounds 0-1 (forces at least one tool call early), `"auto"` from round 2
 - Tool provider injection: web_search and image_gen API keys decrypted and passed to tool execution
 - Billing per round (LLM) + per tool call
@@ -284,23 +298,28 @@ User Input (Agent mode)
   3. Creates system messages showing search results to user
 - Falls back gracefully if no `web_search` provider configured
 
-### Style Anchor Flow
-For multi-item generation (e.g. "3 emoji pack"), handled via intent-based routing:
+### Intent-Based Strategy Routing
+For multi-item generation (e.g. "3 emoji pack"), handled via code-driven intent routing:
 
-1. **Intent classification**: `parse_agent_intent()` classifies prompts into intent types (multi_item, radiate, iterative, single) via 8 priority-ordered regex rules
-2. **multi_item** (表情包/three-view/enumerated): Bypasses agent loop via `execute_multi_item_intent()` — parallel `generate_image` tool calls
-3. **radiate** (套图/一组/系列): Enters the agent loop; LLM's `plan` tool triggers `_execute_radiate()` — anchor grid → PIL crops → per-item expansion with `chat_edit()`
-4. **iterative**: Enters the agent loop; LLM calls `plan` tool with iterative strategy → `execute_iterative()` sequential execution
-5. **parallel**: Enters the agent loop; LLM calls `plan` tool with parallel strategy → `execute_parallel()` concurrent execution via Semaphore
+1. **Intent classification**: `classify_intent_with_llm()` classifies prompts into 4 task types via pure LLM classification (no regex)
+2. **single** (画一只猫): `SingleExecutor` → `generate_images_core()`
+3. **multi_independent** (画3张不同风格的猫): `ParallelExecutor` → LLM prompts + parallel `generate_images_core()`
+4. **iterative** (先出草图再精修): `IterativeExecutor` → sequential execution
+5. **radiate** (做一套6个表情包): `RadiateExecutor` → anchor grid → PIL crops → per-item `chat_edit()`
 
-Plan executors are in `backend/app/services/plan_executor.py`. Backend-only executors ensure consistent execution regardless of LLM reliability.
+Strategy executors are in `backend/app/services/executors/` (single, parallel, iterative, radiate). `PlanExecutionService` in `plan_execution_service.py` dispatches to the appropriate executor.
 
 ### SSE Events (LamEvent v1 broadcast)
+Agent events broadcast via `TaskManager.publish()` to `GET /api/sessions/events`. Frontend receives via `fetch`+`ReadableStream`.
+
 | LamEvent.event_type | payload.type | Description |
 |---|---|---|
-| `task_progress` | `agent_token` | LLM output token |
-| `task_progress` | `agent_tool_call` | Tool invocation started |
-| `task_progress` | `agent_tool_result` | Tool execution result |
+| `task_started` | `task_started` | Task started, includes `task_type` and `strategy` |
+| `task_progress` | `task_progress` | Progress update, includes `task_type`, `strategy`, `message` |
+| `task_progress` | `agent_token` | LLM output token (sidebar assistant) |
+| `task_progress` | `agent_tool_call` | Tool invocation started (sidebar assistant) |
+| `task_progress` | `agent_tool_result` | Tool execution result (sidebar assistant) |
+| `task_progress` | `agent_tool_warning` | Tool retry exhausted |
 | `checkpoint_required` | `agent_checkpoint` | Agent paused awaiting user approval |
 | `task_completed` | `agent_done` | Agent finished |
 | `task_failed` | `agent_error` | Agent error |

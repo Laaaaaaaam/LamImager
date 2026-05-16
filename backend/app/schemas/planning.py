@@ -1,11 +1,10 @@
-from __future__ import annotations
-
 from typing import Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class PlanningContext(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     session_id: str = ""
     prompt: str = ""
     negative_prompt: str = ""
@@ -24,6 +23,11 @@ class PlanningContext(BaseModel):
     llm_provider_id: str | None = None
     search_context: str = ""
     context_images: list[str] | None = None
+    context_reference_urls: list[str] = []
+    skill_hints: dict | None = None
+    token_budget: dict | None = None
+    critic_mode: str = "on"
+    critic_max_retry: int = 2
 
     @classmethod
     def from_generate_request(
@@ -55,6 +59,22 @@ class PlanningContext(BaseModel):
             context_images=context_images,
         )
 
+    def budget_tokens(self) -> dict:
+        from app.services.planning_context import PlanningContextManager
+        mgr = PlanningContextManager(
+            session_id=self.session_id,
+            prompt=self.prompt,
+            negative_prompt=self.negative_prompt,
+            image_count=self.image_count,
+            image_size=self.image_size,
+            reference_images=self.reference_images,
+            context_images=self.context_images or [],
+            context_reference_urls=self.context_reference_urls,
+            search_context=self.search_context,
+            skill_hints=self.skill_hints,
+        )
+        return mgr.budget_tokens()
+
 
 @runtime_checkable
 class SkillInterface(Protocol):
@@ -64,3 +84,6 @@ class SkillInterface(Protocol):
     parameters: dict
     strategy: str
     steps: list[dict]
+    strategy_hint: str
+    planning_bias: dict
+    constraints: dict

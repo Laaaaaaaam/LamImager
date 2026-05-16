@@ -23,7 +23,7 @@ graph TB
     subgraph BE["后端 FastAPI<br/>[详细架构映射: BACKEND]"]
         direction TB
         Routers["11个路由模块<br/>59个API端点<br/>[详细架构映射: B_ROUTERS]"]
-        Services["15个服务模块<br/>核心: generate/agent<br/>intent/plan_executor<br/>支撑: session/billing/api_mgr<br/>settings/skill/rule/ref<br/>plan_template/prompt_opt<br/>task_manager/agent_bridge<br/>[详细架构映射: B_SERVICES]"]
+        Services["16个服务模块<br/>核心: generate/agent<br/>intent/plan_execution<br/>支撑: session/billing/api_mgr<br/>settings/skill/rule/ref<br/>plan_template/prompt_opt<br/>task_manager/agent_bridge<br/>[详细架构映射: B_SERVICES]"]
         Tools["4个Agent工具<br/>web_search/image_search<br/>generate_image/plan<br/>+ ToolRegistry单例<br/>[详细架构映射: B_TOOLS]"]
         Utils["3个工具库<br/>crypto(AES-256-GCM)<br/>llm_client(OpenAI兼容)<br/>image_client(3层回退)<br/>[详细架构映射: B_UTILS]"]
         Core["事件系统<br/>LamEvent + EventLog<br/>[详细架构映射: B_CORE]"]
@@ -94,7 +94,7 @@ flowchart LR
         B1["generate_service<br/>生图编排"]
         B2["agent_service<br/>Agent循环"]
         B3["agent_intent<br/>意图路由"]
-        B4["plan_executor<br/>计划执行"]
+        B4["plan_execution<br/>计划执行"]
         B5["task_manager<br/>任务+事件"]
     end
 
@@ -145,7 +145,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Input["用户输入<br/>agent_mode=true"] --> Intent["意图解析<br/>8级正则优先级<br/>[详细架构映射: 意图解析优先级图]"]
+    Input["用户输入<br/>agent_mode=true"] --> Intent["意图解析<br/>LLM意图分类<br/>[详细架构映射: 意图解析优先级图]"]
 
     Intent --> Single["single<br/>单图生成"]
     Intent --> Parallel["parallel<br/>多图并行"]
@@ -153,9 +153,9 @@ flowchart TD
     Intent --> Radiate["radiate<br/>辐射套图"]
 
     Single --> Direct["generate_images_core<br/>直接生图"]
-    Parallel --> MultiExec["execute_multi_independent<br/>并行工具调用"]
-    Iterative --> IterSteps["LLM生成步骤<br/>+ execute_iterative"]
-    Radiate --> RadParams["LLM生成辐射参数<br/>+ _execute_radiate"]
+    Parallel --> MultiExec["ParallelExecutor<br/>并行工具调用"]
+    Iterative --> IterSteps["IterativeExecutor<br/>顺序执行"]
+    Radiate --> RadParams["RadiateExecutor<br/>锚点网格→裁切→扩展"]
 
     Direct --> Core["3层img2img回退<br/>[详细架构映射: 图片生成3层回退图]"]
     MultiExec --> Core
@@ -216,7 +216,7 @@ flowchart TD
 | 4个Composable | F_COMPOSABLES 子图 | architecture-detail.mmd → F_COMPOSABLES |
 | 通信协议层 | COMMUNICATION 子图 | architecture-detail.mmd → COMMUNICATION |
 | 11个路由模块 | B_ROUTERS 子图 | architecture-detail.mmd → B_ROUTERS |
-| 15个服务模块 | B_SERVICES 子图 | architecture-detail.mmd → B_SERVICES |
+| 16个服务模块 | B_SERVICES 子图 | architecture-detail.mmd → B_SERVICES |
 | 4个Agent工具 | B_TOOLS 子图 | architecture-detail.mmd → B_TOOLS |
 | 3个工具库 | B_UTILS 子图 | architecture-detail.mmd → B_UTILS |
 | 事件系统 | B_CORE 子图 | architecture-detail.mmd → B_CORE |

@@ -39,7 +39,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ### 后端健康状态
 ```bash
 curl http://localhost:8000/api/health
-# 预期: {"status": "ok", "version": "0.1.0"}
+# 预期: {"status": "ok", "version": "0.4.0-alpha", ...}
 ```
 
 ### 数据库检查

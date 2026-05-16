@@ -11,6 +11,10 @@ class SkillCreate(BaseModel):
     is_builtin: bool = False
     strategy: str = ""
     steps: list[dict] = []
+    strategy_hint: str = ""
+    planning_bias: dict = {}
+    constraints: dict = {}
+    prompt_bias: dict = {}
 
 
 class SkillUpdate(BaseModel):
@@ -20,6 +24,10 @@ class SkillUpdate(BaseModel):
     parameters: dict | None = None
     strategy: str | None = None
     steps: list[dict] | None = None
+    strategy_hint: str | None = None
+    planning_bias: dict | None = None
+    constraints: dict | None = None
+    prompt_bias: dict | None = None
 
 
 class SkillResponse(BaseModel):
@@ -33,6 +41,10 @@ class SkillResponse(BaseModel):
     is_builtin: bool
     strategy: str
     steps: list[dict]
+    strategy_hint: str
+    planning_bias: dict
+    constraints: dict
+    prompt_bias: dict
     created_at: datetime
 
 
@@ -43,3 +55,7 @@ class SkillImport(BaseModel):
     parameters: dict = {}
     strategy: str = ""
     steps: list[dict] = []
+    strategy_hint: str = ""
+    planning_bias: dict = {}
+    constraints: dict = {}
+    prompt_bias: dict = {}

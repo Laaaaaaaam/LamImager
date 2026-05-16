@@ -84,6 +84,14 @@ async def init_db():
             await conn.execute(text("ALTER TABLE skills ADD COLUMN strategy VARCHAR(20) DEFAULT ''"))
         if "steps" not in skill_columns:
             await conn.execute(text("ALTER TABLE skills ADD COLUMN steps JSON DEFAULT '[]'"))
+        if "strategy_hint" not in skill_columns:
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN strategy_hint VARCHAR(20) DEFAULT ''"))
+        if "planning_bias" not in skill_columns:
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN planning_bias JSON DEFAULT '{}'"))
+        if "constraints" not in skill_columns:
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN constraints JSON DEFAULT '{}'"))
+        if "prompt_bias" not in skill_columns:
+            await conn.execute(text("ALTER TABLE skills ADD COLUMN prompt_bias JSON DEFAULT '{}'"))
 
     async with async_session() as session:
         from app.services.plan_template_service import seed_builtin_templates

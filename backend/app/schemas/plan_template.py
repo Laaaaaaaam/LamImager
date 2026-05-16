@@ -59,6 +59,7 @@ class PlanTemplateResponse(BaseModel):
     steps: list[dict]
     variables: list[dict]
     is_builtin: bool
+    builtin_version: int = 0
     created_at: datetime
     updated_at: datetime
 

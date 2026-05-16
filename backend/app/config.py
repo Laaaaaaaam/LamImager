@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     )
 
     APP_NAME: str = "LamImager"
-    APP_VERSION: str = "0.3.1beta"
+    APP_VERSION: str = "0.4.0-alpha"
     APP_AUTHOR: str = "霖二 @Laaaaaaaam"
     APP_AUTHOR_EMAIL: str = "2667605815@qq.com"
     DEBUG: bool = True

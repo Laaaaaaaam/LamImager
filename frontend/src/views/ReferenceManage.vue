@@ -57,8 +57,12 @@ const fileInput = ref<HTMLInputElement | null>(null)
 onMounted(loadRefs)
 
 async function loadRefs() {
-  const { data } = await referenceApi.list()
-  references.value = data
+  try {
+    const { data } = await referenceApi.list()
+    references.value = data
+  } catch {
+    dialog.showAlert('加载参考图列表失败')
+  }
 }
 
 function triggerUpload() {
@@ -69,8 +73,12 @@ async function handleUpload(e: Event) {
   const target = e.target as HTMLInputElement
   if (!target.files?.length) return
   const file = target.files[0]
-  await referenceApi.upload(file)
-  await loadRefs()
+  try {
+    await referenceApi.upload(file)
+    await loadRefs()
+  } catch {
+    dialog.showAlert('上传参考图失败')
+  }
   target.value = ''
 }
 
@@ -85,18 +93,30 @@ function thumbnailUrl(r: ReferenceImage) {
 }
 
 async function updateStrength(id: string, value: string) {
-  await referenceApi.update(id, { strength: parseFloat(value) })
+  try {
+    await referenceApi.update(id, { strength: parseFloat(value) })
+  } catch {
+    dialog.showAlert('更新强度失败')
+  }
 }
 
 async function toggleGlobal(r: ReferenceImage) {
-  await referenceApi.update(r.id, { is_global: !r.is_global })
-  await loadRefs()
+  try {
+    await referenceApi.update(r.id, { is_global: !r.is_global })
+    await loadRefs()
+  } catch {
+    dialog.showAlert('切换全局状态失败')
+  }
 }
 
 async function removeRef(id: string) {
   if (await dialog.showConfirm('确定删除此参考图？')) {
-    await referenceApi.delete(id)
-    await loadRefs()
+    try {
+      await referenceApi.delete(id)
+      await loadRefs()
+    } catch {
+      dialog.showAlert('删除参考图失败')
+    }
   }
 }
 </script>

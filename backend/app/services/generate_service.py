@@ -144,12 +144,12 @@ async def handle_generate(db: AsyncSession, data: GenerateRequest) -> dict:
     llm_provider_id = await _get_default_provider(db, "default_optimize_provider_id")
 
     if data.refine_mode or data.selected_image_url:
-        clarification_result = await _apply_image_context_resolution(
+        resolution_result = await _apply_image_context_resolution(
             db=db, data=data, session_id=session_id,
             task_manager=task_manager, correlation_id=f"gen-{session_id}",
         )
-        if clarification_result is not None:
-            return clarification_result
+        if isinstance(resolution_result, dict):
+            return resolution_result
 
     context_ref_urls = []
     for msg in (data.context_messages or []):
@@ -727,12 +727,14 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
     context_images = _extract_context_image_urls_from_messages(data.context_messages)
     logger.info(f"handle_agent_generate: context_images count={len(context_images) if context_images else 0}")
 
-    clarification_result = await _apply_image_context_resolution(
+    resolution_result = await _apply_image_context_resolution(
         db=db, data=data, session_id=session_id,
         task_manager=task_manager, correlation_id=correlation_id,
     )
-    if clarification_result is not None:
-        return clarification_result
+    if isinstance(resolution_result, dict):
+        return resolution_result
+
+    resolver_mode = resolution_result if isinstance(resolution_result, str) else "new_generation"
 
     forced_strategy = data.agent_plan_strategy if data.agent_plan_strategy else ""
     if forced_strategy:
@@ -768,6 +770,10 @@ async def handle_agent_generate(db: AsyncSession, data: GenerateRequest) -> dict
         context_messages=data.context_messages,
         reference_labels=data.reference_labels,
     )
+
+    if resolver_mode == "new_generation" and context_refs:
+        logger.info(f"handle_agent_generate: new_generation intent, clearing {len(context_refs)} context_refs to prevent unintended image forwarding")
+        context_refs = []
 
     from app.core.events import LamEvent
     await task_manager.publish(LamEvent(
@@ -1244,7 +1250,7 @@ async def _apply_image_context_resolution(
     session_id: str,
     task_manager: TaskManager,
     correlation_id: str,
-) -> dict | None:
+) -> dict | str | None:
     session_images = await _build_session_images(db, session_id)
 
     manual_refine: list[str] = []
@@ -1324,4 +1330,4 @@ async def _apply_image_context_resolution(
         except Exception as e:
             logger.warning(f"ImageContextResolver: failed to convert URLs to base64: {e}")
 
-    return None
+    return resolution.mode

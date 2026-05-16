@@ -51,7 +51,10 @@ async def stream_llm_chat(
             tokens_out = usage_from_api["completion_tokens"]
         else:
             tokens_out = LLMClient.estimate_tokens(full_text)
-            tokens_in = sum(LLMClient.estimate_tokens(m["content"]) for m in messages)
+            tokens_in = sum(
+                LLMClient.estimate_tokens(m["content"] if isinstance(m["content"], str) else str(m["content"]))
+                for m in messages
+            )
 
         cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=1)
 
@@ -72,31 +75,31 @@ async def stream_llm_chat(
         yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
 OPTIMIZATION_PROMPTS = {
-    "detail_enhancement": """You are a prompt optimization assistant. Enhance the given image generation prompt by adding more specific visual details, textures, lighting conditions, and atmospheric elements. Keep the original intent but make it more vivid and descriptive.
+    "detail_enhancement": """You are a prompt optimization assistant. Enhance the given image generation prompt by making vague descriptions more specific and vivid. Only add details where the original is genuinely vague — if a detail is already clear, keep it as-is. Do not pile on adjectives or generic quality keywords.
 
 Original prompt: {prompt}
 
 Provide ONLY the enhanced prompt, no explanations.""",
 
-    "style_unification": """You are a prompt optimization assistant. Refine the given image generation prompt for consistent artistic style, color harmony, and visual coherence. Ensure the style description is clear and unified.
+    "style_unification": """You are a prompt optimization assistant. Refine the given image generation prompt for consistent artistic style and visual coherence. Only add style descriptors when they serve the image's intent — do not force a style onto a prompt that doesn't need one.
 
 Original prompt: {prompt}
 
 Provide ONLY the refined prompt, no explanations.""",
 
-    "composition_optimization": """You are a prompt optimization assistant. Optimize the given image generation prompt for better composition, framing, focal point, and visual balance. Add composition-specific keywords and spatial descriptions.
+    "composition_optimization": """You are a prompt optimization assistant. Optimize the given image generation prompt for better composition and visual balance. Only add composition guidance when it meaningfully improves the image — skip for simple subjects where composition is not the focus.
 
 Original prompt: {prompt}
 
 Provide ONLY the optimized prompt, no explanations.""",
 
-    "color_adjustment": """You are an expert color theorist and image generation prompt engineer. Refine the given image generation prompt to achieve superior color harmony, mood-appropriate palettes, and atmospheric color grading. Consider complementary colors, color temperature, saturation balance, and how color supports the emotional intent of the image.
+    "color_adjustment": """You are a prompt optimization assistant. Refine the given image generation prompt for better color harmony and mood-appropriate palettes. Only add color direction when color is relevant to the intent — do not force color theory onto prompts where it adds no value.
 
 Original prompt: {prompt}
 
 Provide ONLY the refined prompt, no explanations.""",
 
-    "lighting_enhancement": """You are an expert lighting designer and image generation prompt engineer. Enhance the given image generation prompt with sophisticated lighting descriptions. Consider light sources (natural, artificial, ambient), light direction and angle, shadow casting, volumetric lighting, rim lighting, and light color temperature. Add specific lighting techniques that enhance depth, drama, and atmosphere.
+    "lighting_enhancement": """You are a prompt optimization assistant. Enhance the given image generation prompt with lighting descriptions when lighting matters to the mood or atmosphere. Only add lighting details when they serve the image's intent — do not add lighting to every prompt by default.
 
 Original prompt: {prompt}
 
@@ -105,14 +108,14 @@ Provide ONLY the refined prompt, no explanations.""",
 
 # Focus descriptions for multi-direction merging (no repeated prompt/footer)
 OPTIMIZATION_FOCUSES = {
-    "detail_enhancement": "Add more specific visual details, textures, lighting conditions, and atmospheric elements. Keep the original intent but make it more vivid and descriptive.",
-    "style_unification": "Ensure consistent artistic style, color harmony, and visual coherence. Make the style description clear and unified.",
-    "composition_optimization": "Improve composition, framing, focal point, and visual balance. Add composition-specific keywords and spatial descriptions.",
-    "color_adjustment": "Achieve superior color harmony, mood-appropriate palettes, and atmospheric color grading. Consider complementary colors, color temperature, and saturation balance.",
-    "lighting_enhancement": "Add sophisticated lighting descriptions: light sources, direction, shadow casting, volumetric lighting, rim lighting, and light color temperature.",
+    "detail_enhancement": "Make vague descriptions more specific and vivid. Only add details where genuinely vague — do not pile on adjectives or generic quality keywords.",
+    "style_unification": "Ensure consistent artistic style and visual coherence. Only add style descriptors when they serve the image's intent.",
+    "composition_optimization": "Improve composition and visual balance. Only add composition guidance when it meaningfully improves the image.",
+    "color_adjustment": "Achieve better color harmony and mood-appropriate palettes. Only add color direction when color is relevant to the intent.",
+    "lighting_enhancement": "Add lighting descriptions when lighting matters to the mood or atmosphere. Do not add lighting to every prompt by default.",
 }
 
-CUSTOM_OPTIMIZATION_PROMPT = """You are a prompt optimization assistant. Optimize the given image generation prompt following the user's custom instruction carefully.
+CUSTOM_OPTIMIZATION_PROMPT = """You are a prompt optimization assistant. Optimize the given image generation prompt following the user's custom instruction carefully. Do not over-embellish — apply the instruction precisely without adding unnecessary details.
 
 Custom instruction: {instruction}
 
@@ -120,7 +123,7 @@ Original prompt: {prompt}
 
 Provide ONLY the optimized prompt, no explanations."""
 
-DEFAULT_OPTIMIZATION_PROMPT = """You are a prompt optimization assistant. Optimize the given image generation prompt to make it more descriptive, vivid, and effective for image generation.
+DEFAULT_OPTIMIZATION_PROMPT = """You are a prompt optimization assistant. Optimize the given image generation prompt to make it more effective for image generation. Only expand vague parts — if the prompt is already specific, keep it concise. Do not add generic quality keywords or unnecessary details.
 
 Original prompt: {prompt}
 
@@ -155,7 +158,9 @@ def build_optimization_prompt(direction_str: str, prompt: str) -> str:
 
     return (
         "You are an expert image generation prompt engineer. "
-        "Optimize the following prompt by simultaneously applying ALL of these focuses:\n"
+        "Optimize the following prompt by applying these focuses where they genuinely improve the result. "
+        "Do NOT apply every focus mechanically — skip any focus that would add noise rather than value for this specific prompt. "
+        "Less is more when the original prompt is already clear.\n\n"
         + "\n".join(focuses)
         + f"\n\nOriginal prompt: {prompt}"
         + "\n\nProvide ONLY the refined prompt, no explanations."
@@ -163,7 +168,8 @@ def build_optimization_prompt(direction_str: str, prompt: str) -> str:
 
 
 async def optimize_prompt(
-    db: AsyncSession, data: PromptOptimizeRequest
+    db: AsyncSession, data: PromptOptimizeRequest,
+    context_images: list[str] | None = None,
 ) -> PromptOptimizeResponse:
     result = await db.execute(select(ApiProvider).where(ApiProvider.id == data.llm_provider_id))
     provider = result.scalar_one_or_none()
@@ -187,6 +193,19 @@ async def optimize_prompt(
             {"role": "user", "content": data.multimodal_context + [
                 {"type": "text", "text": f"\n\n根据上述上下文和参考图片，优化以下生图提示词:\n{data.prompt}"}
             ]},
+        ]
+    elif context_images:
+        user_content: list[dict] = [
+            {"type": "text", "text": f"根据参考图片，优化以下生图提示词:\n{data.prompt}"},
+        ]
+        for img_url in context_images[:2]:
+            user_content.append({
+                "type": "image_url",
+                "image_url": {"url": img_url, "detail": "auto"},
+            })
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
         ]
     else:
         messages = [
@@ -255,7 +274,10 @@ async def optimize_prompt_stream(
         full_text = "".join(full_response)
 
         tokens_out = LLMClient.estimate_tokens(full_text)
-        tokens_in = sum(LLMClient.estimate_tokens(m["content"]) for m in messages)
+        tokens_in = sum(
+            LLMClient.estimate_tokens(m["content"] if isinstance(m["content"], str) else str(m["content"]))
+            for m in messages
+        )
 
         cost = calc_cost(provider, tokens_in=tokens_in, tokens_out=tokens_out, call_count=1)
 

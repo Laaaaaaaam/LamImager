@@ -14,6 +14,10 @@ async def create_skill(db: AsyncSession, data: SkillCreate) -> Skill:
         parameters=data.parameters,
         strategy=data.strategy,
         steps=data.steps,
+        strategy_hint=data.strategy_hint,
+        planning_bias=data.planning_bias,
+        constraints=data.constraints,
+        prompt_bias=data.prompt_bias,
         is_builtin=data.is_builtin,
     )
     db.add(skill)
@@ -65,6 +69,10 @@ async def import_skill(db: AsyncSession, data: SkillImport) -> Skill:
         parameters=data.parameters,
         strategy=data.strategy,
         steps=data.steps,
+        strategy_hint=data.strategy_hint,
+        planning_bias=data.planning_bias,
+        constraints=data.constraints,
+        prompt_bias=data.prompt_bias,
         is_builtin=False,
     )
     db.add(skill)
@@ -73,7 +81,10 @@ async def import_skill(db: AsyncSession, data: SkillImport) -> Skill:
     return skill
 
 
-def apply_skill(prompt: str, skill: Skill, params: dict = None) -> str | ExecutionPlan:
+def apply_skill(prompt: str, skill: Skill, params: dict | None = None) -> str | ExecutionPlan | dict:
+    if skill.strategy_hint or skill.planning_bias or skill.constraints or skill.prompt_bias:
+        return skill_to_planner_hints(skill)
+
     if skill.strategy and skill.steps:
         return skill_to_execution_plan(skill, prompt=prompt, params=params)
 
@@ -91,6 +102,17 @@ def apply_skill(prompt: str, skill: Skill, params: dict = None) -> str | Executi
     except (KeyError, IndexError):
         pass
     return result
+
+
+def skill_to_planner_hints(skill: Skill) -> dict:
+    return {
+        "skill_id": skill.id,
+        "skill_name": skill.name,
+        "strategy_hint": skill.strategy_hint or "",
+        "planning_bias": skill.planning_bias or {},
+        "constraints": skill.constraints or {},
+        "prompt_bias": skill.prompt_bias or {},
+    }
 
 
 def skill_to_execution_plan(skill: Skill, prompt: str = "", params: dict | None = None) -> ExecutionPlan:
@@ -130,6 +152,10 @@ def skill_to_response(skill: Skill) -> dict:
         "parameters": skill.parameters or {},
         "strategy": skill.strategy or "",
         "steps": skill.steps or [],
+        "strategy_hint": skill.strategy_hint or "",
+        "planning_bias": skill.planning_bias or {},
+        "constraints": skill.constraints or {},
+        "prompt_bias": skill.prompt_bias or {},
         "is_builtin": skill.is_builtin,
         "created_at": skill.created_at,
     }

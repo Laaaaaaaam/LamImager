@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -11,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.services.settings_service import get_setting
+
+FILENAME_WHITELIST = re.compile(r'^[\w\u4e00-\u9fff.\-]+$')
 
 router = APIRouter(prefix="/api/download", tags=["download"])
 
@@ -55,9 +58,15 @@ async def download_image(req: DownloadImageRequest, db: AsyncSession = Depends(g
             content={"success": False, "error": f"路径不是目录: {save_dir}", "path": str(save_dir)},
         )
 
+    if not FILENAME_WHITELIST.match(req.filename):
+        return JSONResponse(
+            status_code=400,
+            content={"success": False, "error": f"非法文件名: {req.filename}"},
+        )
+
     filepath = save_dir / req.filename
     resolved = filepath.resolve()
-    if not str(resolved).startswith(str(save_dir.resolve())):
+    if not resolved.is_relative_to(save_dir.resolve()):
         return JSONResponse(
             status_code=400,
             content={"success": False, "error": f"非法文件路径: {filepath}"},

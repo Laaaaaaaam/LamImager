@@ -146,9 +146,10 @@ LamImager/
 │       ├── main.py              # FastAPI entry point
 │       ├── config.py            # Settings (DATA_DIR, DB_URL, CORS)
 │       ├── database.py          # Async SQLAlchemy setup
-│       ├── models/              # SQLAlchemy models (9 tables)
+│       ├── models/              # SQLAlchemy models (10 tables)
 │       ├── routers/             # FastAPI routers (11 modules)
-│       ├── services/            # Business logic (16 services)
+│       ├── services/            # Business logic (17 services)
+│       │   └── executors/       # 4 strategy executors (single, parallel, iterative, radiate)
 │       ├── schemas/             # Pydantic request/response models
 │       └── utils/               # crypto, llm_client, image_client
 ├── frontend/

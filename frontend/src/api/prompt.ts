@@ -3,11 +3,13 @@ import { parseSSEStream } from './sse'
 import type { PromptOptimizeResult } from '../types'
 
 export const promptApi = {
-  optimize: (prompt: string, direction: string, llmProviderId: string) =>
+  optimize: (prompt: string, direction: string, llmProviderId: string, sessionId?: string, multimodalContext?: Record<string, unknown>[]) =>
     api.post<PromptOptimizeResult>('/prompt/optimize', {
       prompt,
       direction,
       llm_provider_id: llmProviderId,
+      session_id: sessionId || null,
+      multimodal_context: multimodalContext || null,
     }),
 
   optimizeStream: async function* (

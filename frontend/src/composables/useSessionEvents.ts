@@ -8,8 +8,10 @@ export function useSessionEvents(
   onAgentEvent?: (event: LamEvent) => void,
 ) {
   let abortController: AbortController | null = null
+  let retryTimer: ReturnType<typeof setTimeout> | null = null
   let retryCount = 0
   const BASE_DELAY = 1000
+  let currentSessionId: string | null = null
 
   function getRetryDelay(): number {
     const delay = Math.min(BASE_DELAY * Math.pow(2, retryCount), 30000)
@@ -21,7 +23,20 @@ export function useSessionEvents(
     retryCount = 0
   }
 
-  async function connect() {
+  function clearRetryTimer() {
+    if (retryTimer !== null) {
+      clearTimeout(retryTimer)
+      retryTimer = null
+    }
+  }
+
+  async function connect(sessionId?: string) {
+    if (sessionId !== undefined) currentSessionId = sessionId
+    console.log('[SSE] connecting, session_id:', currentSessionId)
+
+    if (abortController) {
+      abortController.abort()
+    }
     abortController = new AbortController()
 
     try {
@@ -30,16 +45,22 @@ export function useSessionEvents(
         headers['Last-Event-ID'] = lastEventId
       }
 
-      const response = await fetch('/api/sessions/events', {
+      const params = new URLSearchParams()
+      if (currentSessionId) params.set('session_id', currentSessionId)
+      const url = '/api/sessions/events' + (params.toString() ? '?' + params.toString() : '')
+
+      const response = await fetch(url, {
         headers,
         signal: abortController.signal,
       })
 
       if (!response.ok || !response.body) {
-        setTimeout(connect, getRetryDelay())
+        console.warn('[SSE] connect failed, status=', response.status, 'retrying...')
+        retryTimer = setTimeout(() => connect(), getRetryDelay())
         return
       }
 
+      console.log('[SSE] connected', currentSessionId ? `session=${currentSessionId}` : '(global)')
       resetRetry()
 
       const reader = response.body.getReader()
@@ -61,6 +82,7 @@ export function useSessionEvents(
             const jsonStr = line.substring(6)
             try {
               const data = JSON.parse(jsonStr)
+              console.log('[SSE] recv:', data.event_type, data.payload?.type, data.payload?.session_id?.slice(0,8))
 
               if (data.event_type === 'task_progress' && data.payload?.type === 'task_progress') {
                 onTaskUpdate({
@@ -72,7 +94,7 @@ export function useSessionEvents(
                   task_type: data.payload.task_type,
                   strategy: data.payload.strategy,
                 })
-              } else if (data.event_type === 'snapshot') {
+              } else if (data.type === 'snapshot') {
                 onSnapshot(data.data)
               } else if (
                 ['task_started', 'task_progress', 'checkpoint_required', 'task_completed', 'task_failed'].includes(data.event_type) &&
@@ -87,15 +109,20 @@ export function useSessionEvents(
         }
       }
 
-      setTimeout(connect, getRetryDelay())
-    } catch (e: any) {
-      if (e.name !== 'AbortError') {
-        setTimeout(connect, getRetryDelay())
+      console.log('[SSE] disconnected (stream ended), reconnecting...')
+      retryTimer = setTimeout(() => connect(), getRetryDelay())
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        console.log('[SSE] disconnected (aborted)')
+      } else {
+        console.warn('[SSE] disconnected reason:', e instanceof Error ? e.message : e, 'reconnecting...')
+        retryTimer = setTimeout(() => connect(), getRetryDelay())
       }
     }
   }
 
   function disconnect() {
+    clearRetryTimer()
     abortController?.abort()
     abortController = null
   }

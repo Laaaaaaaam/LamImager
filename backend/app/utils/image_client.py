@@ -233,6 +233,9 @@ class ImageClient:
         result = []
         session = await get_shared_session()
         for url in urls[:6]:
+            if url.startswith("data:"):
+                result.append(url)
+                continue
             try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                     if resp.status == 200:

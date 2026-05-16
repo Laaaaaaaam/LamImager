@@ -107,13 +107,13 @@ graph TB
             Schemas["ApiProvider: Create/Update/Response/TestResult<br/>AppSetting: Response/Update/DefaultModelsConfig<br/>Billing: RecordResponse/Summary/DetailQuery<br/>PlanTemplate: StepSchema/VariableSchema<br/>Create/Update/Response/ApplyRequest<br/>Prompt: OptimizeRequest/OptimizeResponse<br/>Reference: Create/Update/Response<br/>Rule: Create/Update/Response<br/>Session: Create/Update/Response<br/>MessageCreate/MessageResponse/GenerateRequest<br/>Skill: Create/Update/Response/Import"]
         end
 
-        subgraph B_SERVICES["服务层 Services (15个模块)"]
+        subgraph B_SERVICES["服务层 Services (16个模块)"]
             direction LR
-            SGenerate["generate_service.py<br/>核心生成服务<br/>handle_generate()<br/>handle_agent_generate()<br/>generate_images_core()<br/>_execute_radiate()<br/>_execute_single()"]
+            SGenerate["generate_service.py<br/>核心生成服务<br/>handle_generate()<br/>handle_agent_generate()<br/>generate_images_core()<br/>_run_agent_mode_graph()<br/>_execute_direct()"]
             SAgent["agent_service.py<br/>Agent循环<br/>run_agent_loop()<br/>AGENT_SYSTEM_PROMPT<br/>事件: Token/ToolCall<br/>ToolResult/Done<br/>Error/Warning/Cancelled"]
-            SAgentIntent["agent_intent_service.py<br/>意图解析<br/>parse_agent_intent()<br/>8级正则优先级<br/>策略: single/parallel<br/>iterative/radiate<br/>resolve_context_references()<br/>execute_multi_independent()"]
+            SAgentIntent["agent_intent_service.py<br/>意图解析<br/>classify_intent_with_llm()<br/>纯LLM分类(无正则)<br/>策略: single/parallel<br/>iterative/radiate<br/>resolve_context_references()<br/>has_search_intent()"]
             SAgentBridge["agent_bridge.py<br/>事件桥接<br/>agent_event_to_lam_event()<br/>AgentEvent→LamEvent映射"]
-            SPlanExecutor["plan_executor.py<br/>计划执行器<br/>execute_parallel()<br/>execute_iterative()"]
+            SPlanExecution["plan_execution_service.py<br/>计划执行服务<br/>execute()→策略分派<br/>Single/Parallel<br/>Iterative/Radiate"]
             SSessionMgr["session_manager.py<br/>会话管理<br/>CRUD + 聚合统计<br/>add_message()<br/>add_system_message()"]
             SBilling["billing_service.py<br/>计费服务<br/>calc_cost()<br/>record_billing()<br/>get_summary/details<br/>export_billing_csv<br/>get_breakdown()"]
             SApiMgr["api_manager.py<br/>API提供商管理<br/>CRUD + 加密/解密<br/>test_connection()<br/>provider_to_response()"]
@@ -367,19 +367,17 @@ sequenceDiagram
     User->>Sessions: 点击生成(Agent模式)
     Sessions->>Router: POST /api/sessions/{id}/generate<br/>{agent_mode:true, prompt, ...}
     Router->>GenSvc: handle_agent_generate(data)
-    GenSvc->>GenSvc: parse_agent_intent(prompt)<br/>8级正则解析意图
+    GenSvc->>GenSvc: classify_intent_with_llm(prompt)<br/>纯LLM意图分类
     GenSvc->>GenSvc: resolve_context_references()<br/>解析参考图URL
 
     alt single策略
-        GenSvc->>GenSvc: _execute_single()
+        GenSvc->>PlanExec: SingleExecutor.execute()
     else parallel策略
-        GenSvc->>GenSvc: execute_multi_independent()
+        GenSvc->>PlanExec: ParallelExecutor.execute()
     else iterative策略
-        GenSvc->>GenSvc: _generate_iterative_steps()
-        GenSvc->>GenSvc: execute_iterative()
+        GenSvc->>PlanExec: IterativeExecutor.execute()
     else radiate策略
-        GenSvc->>GenSvc: _generate_radiate_params()
-        GenSvc->>GenSvc: _execute_radiate()
+        GenSvc->>PlanExec: RadiateExecutor.execute()
     end
 
     GenSvc->>AgentSvc: run_agent_loop()<br/>(max_rounds=5)
@@ -469,7 +467,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Start[_execute_radiate] --> Grid[_compute_grid_config<br/>根据expected_count计算<br/>网格cols×rows]
+    Start[RadiateExecutor.execute] --> Grid[计算网格配置<br/>根据expected_count计算<br/>网格cols×rows]
 
     Grid --> Anchor[生成风格锚点网格图<br/>prompt含全局风格描述<br/>size: 4096x4096<br/>回退: 2048→1024]
 
@@ -494,23 +492,19 @@ flowchart TD
     class Fallback fallback
 ```
 
-## 意图解析优先级
+## 意图分类 (LLM)
 
 ```mermaid
 flowchart TD
-    Start[parse_agent_intent<br/>输入: prompt, image_count<br/>context_messages, reference_labels] --> P1
+    Start[intent_node<br/>输入: prompt, image_count<br/>context_messages, reference_labels] --> LLM
 
-    P1{Priority 1: radiate<br/>套图/一组/系列<br/>统一风格/同角色/表情包}
-    P1 -->|匹配| R1[task_type=radiate<br/>strategy=radiate]
+    LLM[classify_intent_with_llm<br/>纯LLM分类<br/>INTENT_CLASSIFIER_PROMPT] --> Parse{解析JSON响应}
 
-    P1 -->|不匹配| P2{Priority 2: iterative<br/>先...再...最后<br/>草图精修/基于上一张}
-    P2 -->|匹配| R2[task_type=iterative<br/>strategy=iterative]
-
-    P2 -->|不匹配| P3{Priority 3: multi_independent<br/>三视图+方向枚举<br/>不同风格/分别画<br/>N张+列表}
-    P3 -->|匹配| R3[task_type=multi_independent<br/>strategy=parallel<br/>提取items列表]
-
-    P3 -->|不匹配| P4{Priority 4: single<br/>默认/变体/多张同风格}
-    P4 -->|匹配| R4[task_type=single<br/>strategy=single]
+    Parse -->|task_type=radiate| R1[task_type=radiate<br/>strategy=radiate]
+    Parse -->|task_type=iterative| R2[task_type=iterative<br/>strategy=iterative]
+    Parse -->|task_type=multi_independent| R3[task_type=multi_independent<br/>strategy=parallel<br/>提取items列表]
+    Parse -->|task_type=single| R4[task_type=single<br/>strategy=single]
+    Parse -->|解析失败/无LLM| Fallback[回退: task_type=single<br/>strategy=single]
 
     R1 --> Route[策略路由]
     R2 --> Route
@@ -518,16 +512,16 @@ flowchart TD
     R4 --> Route
 
     Route --> S1{single}
-    S1 -->|执行| E1[_execute_single<br/>直接generate_images_core]
+    S1 -->|执行| E1[SingleExecutor<br/>直接generate_images_core]
 
     Route --> S2{parallel}
-    S2 -->|执行| E2[execute_multi_independent<br/>并行generate_image工具调用]
+    S2 -->|执行| E2[ParallelExecutor<br/>并行generate_image工具调用]
 
     Route --> S3{iterative}
-    S3 -->|执行| E3[_generate_iterative_steps<br/>LLM生成步骤<br/>+ execute_iterative<br/>顺序执行+参考图传递]
+    S3 -->|执行| E3[IterativeExecutor<br/>顺序执行<br/>+参考图传递]
 
     Route --> S4{radiate}
-    S4 -->|执行| E4[_generate_radiate_params<br/>LLM生成辐射参数<br/>+ _execute_radiate<br/>锚点网格→裁切→扩展]
+    S4 -->|执行| E4[RadiateExecutor<br/>锚点网格→裁切→扩展]
 
     classDef priority fill:#FFCDD2,stroke:#C62828,stroke-width:2px
     classDef result fill:#C8E6C9,stroke:#2E7D32,stroke-width:2px
@@ -544,7 +538,7 @@ flowchart TD
 flowchart LR
     subgraph 事件源
         Agent["agent_service<br/>run_agent_loop()"]
-        PlanExec["plan_executor<br/>execute_parallel/iterative"]
+        PlanExec["plan_execution_service<br/>execute()→策略分派"]
         GenSvc["generate_service<br/>handle_generate/agent_generate"]
     end
 

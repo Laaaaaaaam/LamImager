@@ -30,8 +30,10 @@ class EventLog:
             self._events = self._events[-self.max_size :]
         return sse_id
 
-    def replay_since(self, last_event_id: str | None) -> list[tuple[str, LamEvent]]:
+    def replay_since(self, last_event_id: str | None, tail: int = 0) -> list[tuple[str, LamEvent]]:
         if not last_event_id:
+            if tail > 0 and self._events:
+                return self._events[-tail:]
             return []
         for i, (eid, _) in enumerate(self._events):
             if eid == last_event_id:

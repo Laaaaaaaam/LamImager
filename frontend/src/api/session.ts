@@ -31,6 +31,6 @@ export const sessionApi = {
 
   cancel: (id: string) => api.post(`/sessions/${id}/cancel`),
 
-  checkpoint: (id: string, approved: boolean, feedback: string = '') =>
-    api.post(`/sessions/${id}/agent/checkpoint`, { approved, feedback }),
+  checkpoint: (id: string, action: string, feedback: string = '') =>
+    api.post(`/sessions/${id}/agent/checkpoint`, { action, feedback }),
 }

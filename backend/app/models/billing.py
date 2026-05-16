@@ -25,7 +25,7 @@ class BillingRecord(Base):
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
     cost: Mapped[float] = mapped_column(Numeric(10, 6), default=0)
     currency: Mapped[str] = mapped_column(String(10), default="CNY")
-    detail: Mapped[str] = mapped_column(JSON, default=dict)
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
     session = relationship("Session", back_populates="billing_records")

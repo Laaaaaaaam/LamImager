@@ -1,4 +1,3 @@
-from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,3 +70,10 @@ async def set_default_models(db: AsyncSession, config: dict) -> dict:
         await set_setting(db, "max_concurrent", {"value": config["max_concurrent"]})
 
     return await get_default_models(db)
+
+
+async def get_use_langgraph(db: AsyncSession) -> bool:
+    val = await get_setting(db, "use_langgraph")
+    if val and isinstance(val, dict):
+        return val.get("value", True)
+    return True

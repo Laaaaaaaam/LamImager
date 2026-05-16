@@ -94,8 +94,12 @@ const form = reactive({
 onMounted(loadRules)
 
 async function loadRules() {
-  const { data } = await ruleApi.list()
-  rules.value = data
+  try {
+    const { data } = await ruleApi.list()
+    rules.value = data
+  } catch {
+    dialog.showAlert('加载规则列表失败')
+  }
 }
 
 function openDrawer(rule?: Rule) {
@@ -117,24 +121,36 @@ async function saveRule() {
   let config = {}
   try { config = JSON.parse(configJson.value) } catch { dialog.showAlert('配置 JSON 格式无效'); return }
 
-  if (editingRule.value) {
-    await ruleApi.update(editingRule.value.id, { ...form, config })
-  } else {
-    await ruleApi.create({ ...form, config })
+  try {
+    if (editingRule.value) {
+      await ruleApi.update(editingRule.value.id, { ...form, config })
+    } else {
+      await ruleApi.create({ ...form, config })
+    }
+    await loadRules()
+    drawerOpen.value = false
+  } catch {
+    dialog.showAlert('保存规则失败')
   }
-  await loadRules()
-  drawerOpen.value = false
 }
 
 async function toggleActive(rule: Rule) {
-  await ruleApi.toggle(rule.id)
-  await loadRules()
+  try {
+    await ruleApi.toggle(rule.id)
+    await loadRules()
+  } catch {
+    dialog.showAlert('切换规则状态失败')
+  }
 }
 
 async function removeRule(id: string) {
   if (await dialog.showConfirm('确定删除此规则？')) {
-    await ruleApi.delete(id)
-    await loadRules()
+    try {
+      await ruleApi.delete(id)
+      await loadRules()
+    } catch {
+      dialog.showAlert('删除规则失败')
+    }
   }
 }
 

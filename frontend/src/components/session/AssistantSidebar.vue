@@ -593,7 +593,7 @@ defineExpose({
   flex: 1;
   overflow-y: auto;
   margin-bottom: 8px;
-  min-height: 60px;
+  min-height: 0;
 }
 
 .dialog-msg {

@@ -203,17 +203,20 @@ Response: `{"message": "Cancelled"}`
 ```
 POST /api/sessions/{id}/agent/checkpoint
 ```
-Approve or reject agent checkpoint (e.g. anchor grid quality check). Checkpoint auto-rejects after 300s timeout.
+Approve, retry, or replan agent checkpoint (e.g. anchor grid quality check). Checkpoint auto-rejects after 300s timeout.
 
 Body:
 ```json
 {
   "action": "approve",
-  "feedback": ""
+  "feedback": "",
+  "retry_level": "approve"
 }
 ```
 
-`action` values: `"approve"` (continue) | `"reject"` (abort). Any non-approve value is treated as rejection.
+`action` values: `"approve"` (continue) | `"retry_step"` (re-execute current step) | `"replan"` (back to planner). Any other value is treated as rejection.
+
+`retry_level` values: `"approve"` | `"retry_step"` | `"replan"` — if omitted, derived from `action`.
 
 Response:
 ```json
@@ -915,6 +918,8 @@ Response:
 ```json
 {
   "status": "ok",
-  "version": "0.3.1-beta"
+  "version": "0.4.0-alpha",
+  "author": "霖二",
+  "license": "MIT"
 }
 ```

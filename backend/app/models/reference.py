@@ -18,5 +18,5 @@ class ReferenceImage(Base):
     thumbnail: Mapped[str] = mapped_column(String(500), default="")
     is_global: Mapped[bool] = mapped_column(Boolean, default=False)
     strength: Mapped[float] = mapped_column(Float, default=0.5)
-    crop_config: Mapped[str] = mapped_column(JSON, default=dict)
+    crop_config: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

@@ -32,7 +32,7 @@ class Message(Base):
     role: Mapped[str] = mapped_column(Enum(MessageRole), nullable=False)
     content: Mapped[str] = mapped_column(Text, default="")
     message_type: Mapped[str] = mapped_column(Enum(MessageType), default=MessageType.text)
-    metadata_: Mapped[str] = mapped_column("metadata", JSON, default=dict)
+    metadata_: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
     session = relationship("Session", back_populates="messages")
