@@ -30,12 +30,13 @@ MODIFY_INTENT_PATTERNS = [
     for p in [
         r"改", r"修", r"调", r"换", r"变", r"去掉", r"加上", r"减掉", r"删",
         r"线稿化", r"素描化", r"卡通化", r"油画化", r"水彩化", r"扁平化",
-        r"优化", r"精修", r"继续", r"沿着", r"就这个方向",
-        r"再.*一", r"更", r"稍微", r"一点",
+        r"优化", r"精修", r"就这个方向",
+        r"增加", r"加细", r"减少",
+        r"更", r"稍微", r"一点",
         r"背景.*改", r"背景.*去", r"脸.*改", r"颜色.*换", r"配色.*换",
         r"构图.*调", r"姿势.*换",
         r"modify", r"change", r"adjust", r"fix", r"remove", r"add",
-        r"refine", r"improve", r"continue", r"optimize",
+        r"refine\b", r"improve", r"optimize",
     ]
 ]
 
@@ -58,15 +59,19 @@ STYLE_REF_INTENT_PATTERNS = [
 NEW_GEN_INTENT_PATTERNS = [
     re.compile(p)
     for p in [
-        r"再画", r"来个新", r"换个完全不同", r"生成一张", r"新方案", r"重新画",
-        r"重新生成", r"全新",
+        r"再画", r"再生成", r"再来", r"来个新", r"换个完全不同", r"生成一张",
+        r"新方案", r"重新画", r"重新生成", r"全新",
+        r"继续画", r"继续生成", r"继续做",
+        r"画一", r"画只", r"画个", r"画张",
+        r"生成一", r"生成只", r"生成个",
     ]
 ]
 
 EXPLICIT_IMAGE_REF_PATTERNS = [
-    (re.compile(r"图(\d+)"), 1),
-    (re.compile(r"第(\d+)张"), 1),
     (re.compile(r"第([一二三四五六七八九十\d]+)张"), 1),
+    (re.compile(r"第(\d+)张"), 1),
+    (re.compile(r"图([一二三四五六七八九十\d]+)"), 1),
+    (re.compile(r"图(\d+)"), 1),
 ]
 
 CN_NUM_MAP = {
@@ -137,7 +142,7 @@ class ImageContextResolver:
         if manual_refine_images is None:
             manual_refine_images = []
 
-        # Priority 1: manual refine mode
+        # Priority 1: manual refine mode with explicit images
         if refine_mode and manual_refine_images:
             return ImageContextResolution(
                 mode="edit_target",
@@ -146,7 +151,23 @@ class ImageContextResolver:
                 confidence=1.0,
             )
 
-        # Priority 1b: selected image URL
+        # Priority 1b: refine_mode without explicit images — force edit_target
+        if refine_mode:
+            target = selected_image_url or self._get_latest_editable_image(session_images) or ""
+            if target:
+                return ImageContextResolution(
+                    mode="edit_target",
+                    target_images=[target],
+                    reason="refine_mode forced edit_target",
+                    confidence=1.0,
+                )
+            return ImageContextResolution(
+                mode="new_generation",
+                reason="refine_mode but no images available",
+                confidence=0.5,
+            )
+
+        # Priority 1c: selected image URL (non-refine)
         if selected_image_url:
             intent = detect_image_intent(prompt)
             if intent in ("edit_target", "batch_edit", "style_reference"):
