@@ -1228,7 +1228,7 @@ async def _build_session_images(db: AsyncSession, session_id: str) -> list[Sessi
         else:
             img_urls = meta.get("image_urls", [])
         for url in img_urls:
-            if isinstance(url, str) and url.startswith("http"):
+            if isinstance(url, str) and (url.startswith("http") or url.startswith("data:")):
                 images.append(SessionImage(
                     url=url,
                     message_id=str(msg.id),
@@ -1291,6 +1291,13 @@ async def _apply_image_context_resolution(
         urls_to_convert = resolution.target_images[:4]
     elif resolution.mode == "style_reference":
         urls_to_convert = resolution.reference_images[:2]
+
+    if resolution.mode == "style_reference":
+        style_hint = (
+            "【风格参考指令】以下参考图片仅用于参考其风格、配色和氛围。"
+            "请生成一张全新的图片，保留参考图的视觉风格，但不要修改或复制原图内容。\n\n"
+        )
+        data.prompt = style_hint + data.prompt
 
     if urls_to_convert:
         try:

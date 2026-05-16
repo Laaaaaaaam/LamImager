@@ -272,10 +272,10 @@ class ImageContextResolver:
 
     def _get_latest_editable_image(self, session_images: list[SessionImage]) -> str | None:
         for img in session_images:
-            if img.is_from_latest and img.url.startswith("http"):
+            if img.is_from_latest and (img.url.startswith("http") or img.url.startswith("data:")):
                 return img.url
         for img in session_images:
-            if img.url.startswith("http"):
+            if img.url.startswith("http") or img.url.startswith("data:"):
                 return img.url
         return None
 
@@ -285,7 +285,7 @@ class ImageContextResolver:
         latest_idx = session_images[0].message_index
         group: list[str] = []
         for img in session_images:
-            if img.message_index == latest_idx and img.url.startswith("http"):
+            if img.message_index == latest_idx and (img.url.startswith("http") or img.url.startswith("data:")):
                 group.append(img.url)
             else:
                 break
