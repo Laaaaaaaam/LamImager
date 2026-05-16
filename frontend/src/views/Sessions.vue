@@ -53,7 +53,6 @@
         :task-type-label="currentTaskLabel"
         :progress-text="getTaskProgress(currentSessionId || '')"
         :agent-stream-state="agentStreamState"
-        :agent-progress="agentProgress"
         :timeline-messages="timelineMessages"
         :checkpoint-state="agentCheckpointState"
         @copy="copyMessageContent"
@@ -173,7 +172,7 @@ import { promptApi } from '../api/prompt'
 import { settingsApi } from '../api/settings'
 import { sessionApi } from '../api/session'
 import { useBillingStore } from '../stores/billing'
-import type { Skill, DefaultModelsConfig, TaskHandle, TaskUpdateEvent, PlanStep, PlanTemplate, TemplateVariable, AgentStreamState, LamEvent } from '../types'
+import type { Skill, DefaultModelsConfig, TaskHandle, TaskUpdateEvent, PlanStep, PlanTemplate, TemplateVariable, LamEvent } from '../types'
 import { dialog } from '../composables/useDialog'
 import { useSessionEvents } from '../composables/useSessionEvents'
 import Lightbox from '../components/session/Lightbox.vue'
@@ -196,13 +195,9 @@ const messages = computed(() => store.messages)
 
 const inputText = ref('')
 const agentMode = ref(false)
-const agentStreamState = ref<AgentStreamState | null>(null)
-const agentProgress = ref<{ current: number; total: number } | null>(null)
+const agentStreamState = computed(() => store.getAgentStream(currentSessionId.value || '') || null)
+const agentCheckpointState = computed(() => store.getCheckpoint(currentSessionId.value || '') || null)
 const timelineMessages = ref<Message[]>([])
-const agentCheckpointState = ref<{ visible: boolean; message: string; toolName?: string; previewUrl?: string; imageUrls?: string[]; correlationId?: string; stepDescription?: string }>({
-  visible: false,
-  message: '',
-})
 const negativePrompt = ref('')
 const imageCount = ref(1)
 const customCount = ref(false)
@@ -454,7 +449,7 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
       generatingText.value = event.message
     }
     if (event.progress !== undefined && event.total !== undefined && event.total > 0) {
-      agentProgress.value = { current: event.progress, total: event.total }
+      generatingText.value = event.message || generatingText.value
     }
     store.fetchSessions()
   },
@@ -474,187 +469,40 @@ const { connect: connectEvents, disconnect: disconnectEvents } = useSessionEvent
   },
   (event: LamEvent) => {
     const eventSid = event.payload?.session_id || ''
-    if (event.event_type === 'task_started' && event.payload.type === 'task_started') {
-      if (store.getAgentStream(eventSid)) return
-      const streamState: AgentStreamState = {
-        sessionId: eventSid,
-        status: 'thinking',
-        content: '',
-        steps: [],
-        cost: null,
-      }
-      store.setAgentStream(eventSid, streamState)
-      if (eventSid === currentSessionId.value) {
-        agentStreamState.value = streamState
-      }
-      return
-    }
-    if (agentStreamState.value && eventSid === agentStreamState.value.sessionId) {
-      const state = { ...agentStreamState.value, steps: [...agentStreamState.value.steps] }
-      switch (event.payload.type) {
-        case 'agent_token': {
-          const node = event.payload.node || ''
-          if (node) {
-            const nodeStep = state.steps.find(s => s.type === 'node_progress' && s.name === node && s.status === 'running')
-            if (nodeStep) {
-              nodeStep.content = (nodeStep.content || '') + (event.payload.content || '')
-            }
-          }
-          state.content += event.payload.content || ''
-          state.status = 'thinking'
-          break
-        }
-        case 'agent_tool_call':
-          state.steps.push({
-            id: event.event_id,
-            type: 'tool_call',
-            name: event.payload.name || '',
-            status: 'running',
-            args: event.payload.args,
-          })
-          state.status = 'tool_running'
-          break
-        case 'agent_tool_result': {
-          const step = [...state.steps].reverse().find(s => s.name === event.payload.name && s.status === 'running')
-          if (step) {
-            step.status = 'done'
-            step.content = event.payload.content
-            step.meta = event.payload.meta
-          }
-          state.status = 'thinking'
-          break
-        }
-        case 'agent_node_progress': {
-          const nodeName = event.payload.node || ''
-          if (nodeName === 'decision' && event.payload.detail?.result) {
-            const result = event.payload.detail.result as string
-            const rollbackMap: Record<string, string> = {
-              retry_prompt: 'prompt_builder',
-              retry_step: 'executor',
-              replan: 'planner',
-            }
-            const target = rollbackMap[result]
-            if (target) {
-              const idx = state.steps.findIndex(s => s.name === target)
-              if (idx >= 0) state.steps = state.steps.slice(0, idx)
-            }
-          }
-          const existingStep = state.steps.find(s => s.type === 'node_progress' && s.name === nodeName)
-          if (existingStep) {
-            const newStatus = event.payload.status || 'done'
-            const stepContent = event.payload.content || event.payload.message || ''
-            if (nodeName === 'executor' && newStatus === 'step_done' && event.payload.detail) {
-              const completedSteps = (existingStep.meta?.completed_steps as any[]) || []
-              completedSteps.push(event.payload.detail)
-              existingStep.meta = { ...existingStep.meta, completed_steps: completedSteps }
-              existingStep.content = stepContent
-            } else {
-              existingStep.status = newStatus
-              existingStep.content = stepContent
-              existingStep.meta = event.payload.detail
-            }
-          } else {
-            const stepContent = event.payload.content || event.payload.message || ''
-            if (nodeName === 'executor' && event.payload.status === 'step_done' && event.payload.detail) {
-              state.steps.push({
-                id: event.event_id,
-                type: 'node_progress',
-                name: nodeName,
-                status: 'running',
-                content: stepContent,
-                meta: { completed_steps: [event.payload.detail] },
-              })
-            } else {
-              state.steps.push({
-                id: event.event_id,
-                type: 'node_progress',
-                name: nodeName,
-                status: event.payload.status || 'done',
-                content: stepContent,
-                meta: event.payload.detail,
-              })
-            }
-          }
-          if (event.payload.status === 'running') {
-            state.status = 'thinking'
-          }
-          break
-        }
-        case 'agent_tool_warning': {
-          state.steps.push({
-            id: event.event_id,
-            type: 'tool_call',
-            name: event.payload.name || 'warning',
-            status: 'error',
-            content: event.payload.content || event.payload.message || '',
-          })
-          break
-        }
-        case 'agent_done': {
-          state.status = 'done'
-          state.cost = event.payload.cost || null
-          agentProgress.value = null
-          for (const step of state.steps) {
-            if (step.status === 'running') step.status = 'done'
-          }
-          store.fetchMessages(eventSid)
-          store.fetchSessions()
-          break
-        }
-        case 'agent_error':
-          state.status = 'error'
-          agentProgress.value = null
-          store.fetchMessages(eventSid)
-          store.fetchSessions()
-          break
-        case 'agent_cancelled':
-          state.status = 'done'
-          state.content += '\n\n[已取消]'
-          break
-      }
-      agentStreamState.value = state
-      store.setAgentStream(eventSid, state)
-    }
-    if (event.event_type === 'checkpoint_required' && event.payload.type === 'agent_checkpoint') {
-      const cpSessionId = event.payload.session_id
-      if (store.getCheckpoint(cpSessionId)?.visible) return
-      const artifacts = event.payload.artifacts || []
-      const imageUrls = artifacts.filter((a: any) => a.type === 'image').map((a: any) => a.url)
-      const cpInfo = {
-        visible: true,
-        message: event.payload.message || '确认执行',
-        toolName: event.payload.tool_name,
-        previewUrl: imageUrls[0] || '',
-        imageUrls,
-        stepDescription: event.payload.step?.description || '',
-      }
-      store.setCheckpoint(cpSessionId, cpInfo)
-      if (cpSessionId === currentSessionId.value) {
-        agentCheckpointState.value = {
-          visible: true,
-          message: cpInfo.message,
-          toolName: cpInfo.toolName,
-          previewUrl: cpInfo.previewUrl,
-          imageUrls: cpInfo.imageUrls,
-          correlationId: cpSessionId,
-          stepDescription: cpInfo.stepDescription,
-        }
-      }
+    switch (event.payload.type) {
+      case 'task_started':
+        store.handleAgentStarted(eventSid, event)
+        break
+      case 'agent_token':
+        store.handleAgentToken(eventSid, event)
+        break
+      case 'agent_tool_call':
+        store.handleToolCall(eventSid, event)
+        break
+      case 'agent_tool_result':
+        store.handleToolResult(eventSid, event)
+        break
+      case 'agent_node_progress':
+        store.handleNodeProgress(eventSid, event)
+        break
+      case 'agent_tool_warning':
+        store.handleToolWarning(eventSid, event)
+        break
+      case 'agent_done':
+        store.handleAgentDone(eventSid, event)
+        break
+      case 'agent_error':
+        store.handleAgentError(eventSid, event)
+        break
+      case 'agent_cancelled':
+        store.handleAgentCancelled(eventSid, event)
+        break
+      case 'agent_checkpoint':
+        store.handleCheckpoint(eventSid, event)
+        break
     }
     if (event.event_type === 'task_completed' || event.event_type === 'task_failed') {
-      if (eventSid) {
-        if (eventSid !== currentSessionId.value) {
-          store.clearAgentStream(eventSid)
-          store.clearCheckpoint(eventSid)
-        } else {
-          setTimeout(() => {
-            if (agentStreamState.value?.sessionId === eventSid && agentStreamState.value.status === 'done') {
-              agentStreamState.value = null
-              store.clearAgentStream(eventSid)
-            }
-          }, 3000)
-        }
-      }
+      store.handleTaskCompleted(eventSid)
     }
   },
 )
@@ -867,22 +715,6 @@ async function selectSession(id: string) {
   if (memoryMode.value === 'session') {
     assistantSidebarRef.value?.clearDialog()
   }
-  const cpInfo = store.getCheckpoint(id)
-  if (cpInfo?.visible) {
-    agentCheckpointState.value = {
-      visible: true,
-      message: cpInfo.message,
-      toolName: cpInfo.toolName,
-      previewUrl: cpInfo.previewUrl,
-      imageUrls: cpInfo.imageUrls,
-      correlationId: id,
-      stepDescription: cpInfo.stepDescription,
-    }
-  } else {
-    agentCheckpointState.value = { visible: false, message: '' }
-  }
-  const savedStream = store.getAgentStream(id)
-  agentStreamState.value = savedStream || null
   refreshAutoContext()
   disconnectEvents()
   connectEvents(id)
@@ -900,17 +732,13 @@ async function cancelAgent() {
 }
 
 async function resolveAgentCheckpoint(action: string) {
-  const sid = agentCheckpointState.value.correlationId
-  if (!sid) {
-    agentCheckpointState.value.visible = false
-    return
-  }
+  const sid = currentSessionId.value
+  if (!sid) return
   try {
     await sessionApi.checkpoint(sid, action)
   } catch (e: any) {
     console.error('Checkpoint resolve failed:', e)
   }
-  agentCheckpointState.value.visible = false
   store.clearCheckpoint(sid)
 }
 
@@ -918,6 +746,12 @@ async function sendGenerate() {
   if (!inputText.value.trim() && !contextImageList.value.length) return
   const sid = currentSessionId.value
   if (!sid || isSessionBusy(sid)) return
+
+  console.log('[send] agentMode:', agentMode.value, 'sid:', sid?.slice(0,8), 'prompt:', inputText.value?.slice(0,30))
+
+  if (agentMode.value) {
+    store.handleAgentStarted(sid, { event_type: 'task_started', event_id: '', timestamp: Date.now(), source_product: '', target_product: null, correlation_id: '', payload: { type: 'task_started', session_id: sid } } as LamEvent)
+  }
 
   const abortController = new AbortController()
   activeTasks.value.set(sid, {

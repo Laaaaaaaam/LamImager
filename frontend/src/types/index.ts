@@ -75,6 +75,10 @@ export interface Skill {
   is_builtin: boolean
   strategy: string
   steps: Record<string, unknown>[]
+  strategy_hint: string
+  planning_bias: Record<string, unknown>
+  constraints: Record<string, unknown>
+  prompt_bias: Record<string, unknown>
   created_at: string
 }
 
@@ -180,7 +184,7 @@ export interface Message {
   session_id: string
   role: 'user' | 'assistant' | 'system'
   content: string
-  message_type: 'text' | 'image' | 'plan' | 'optimization' | 'skill' | 'error' | 'agent'
+  message_type: 'text' | 'image' | 'plan' | 'optimization' | 'skill' | 'error' | 'agent' | 'agent_timeline'
   metadata: Record<string, unknown>
   created_at: string
 }
@@ -276,6 +280,10 @@ export interface LamEventPayload {
   status?: string
   progress?: number
   total?: number
+  node?: string
+  detail?: Record<string, unknown>
+  artifacts?: Array<{ type: string; url: string }>
+  step?: { description: string }
 }
 
 export interface LamEvent {
@@ -290,17 +298,19 @@ export interface LamEvent {
 
 export interface AgentStreamState {
   sessionId: string
-  status: 'connecting' | 'thinking' | 'tool_running' | 'paused' | 'done' | 'error'
+  status: 'connecting' | 'thinking' | 'tool_running' | 'paused' | 'done' | 'error' | 'cancelled'
   content: string
   steps: AgentStreamStep[]
   cost: number | null
+  startedAt: number | null
 }
 
 export interface AgentStreamStep {
   id: string
-  type: 'tool_call' | 'tool_result' | 'checkpoint' | 'plan'
+  type: 'tool_call' | 'tool_result' | 'checkpoint' | 'plan' | 'node_progress'
   name: string
-  status: 'pending' | 'running' | 'done' | 'error'
+  status: 'pending' | 'running' | 'done' | 'error' | 'step_done'
+  group: 'key' | 'internal'
   args?: Record<string, unknown>
   content?: string
   meta?: Record<string, unknown>
